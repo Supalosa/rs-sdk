@@ -1,3 +1,4 @@
+import {readHintArrow} from '#/bot/hint-arrow.js';
 // Inbound packet framing + dispatch.
 //
 // Ported from Client.ts tcpIn(). One deliberate divergence: the browser client
@@ -287,6 +288,7 @@ export function dispatch(c: LiteClient, opcode: number, buf: Packet, psize: numb
             }
             return;
         }
+        case ServerProt.HINT_ARROW: {readHintArrow(c,buf);return;}
         case ServerProt.TUT_FLASH: {
             c.tutFlashIcon=buf.g1();
             if(c.tutFlashIcon===c.activeIcon)c.activeIcon=c.tutFlashIcon===3?1:3;

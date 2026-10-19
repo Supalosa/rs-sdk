@@ -1,3 +1,4 @@
+import {collectHintArrow} from './hint-arrow';
 import {collectTabs} from './tabs';
 // StateCollector.ts - Collects game state from the client
 // Extracts all relevant game data for bot decision-making
@@ -187,6 +188,7 @@ export class BotStateCollector implements ScanProvider {
             combatEvents: [...this.combatEvents], // Return copy of events
             dialog: { ...this.collectDialogState(), countInputOpen: c.isChatBackInputOpen?.() ?? false },
             tabs: collectTabs(c,IfType.list),
+            hint: collectHintArrow(c),
             quests: collectQuestState(IfType.list, c.var ?? [], c.mainModalId ?? -1),
             interface: this.collectInterfaceState(),
             modalOpen: (c.mainModalId ?? -1) !== -1,

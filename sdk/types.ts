@@ -563,6 +563,8 @@ export interface OpFeedbackState {
 }
 
 export interface BotWorldState {
+    /** Current game-provided hint arrow; null means no active arrow. */
+    hint?: {type:'tile';x:number;z:number}|{type:'npc'|'player';index:number}|null;
     tabs?: {running?:boolean;active:number;flashing:number|null;available:{index:number;name:string}[];tutorialText:string[]};
     tick: number;
     /** Tick on which an updated Lite runner already emitted policy-gated KBD op2. */

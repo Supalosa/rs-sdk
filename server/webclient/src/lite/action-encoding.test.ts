@@ -396,3 +396,10 @@ test('headless publication preserves smithing slot/item/operation metadata throu
  const state=LiteClient.prototype.collectBotState.call(client as never,1);
  expect(state.interface.options[0]).toEqual(option);
 });
+
+test('headless client consumes real hint packets and replaces or clears the target',()=>{
+ const c=makeClient('hints');const tile=Packet.alloc(6);tile.p1(5);tile.p2(3086);tile.p2(3126);tile.p1(150);tile.pos=0;
+ dispatch(c,ServerProt.HINT_ARROW,tile,6);expect(c.hintType).toBe(2);expect(c.hintTileX).toBe(3086);expect(c.hintTileZ).toBe(3126);
+ const npc=Packet.alloc(3);npc.p1(1);npc.p2(4271);npc.pos=0;dispatch(c,ServerProt.HINT_ARROW,npc,3);expect(c.hintType).toBe(1);expect(c.hintNpc).toBe(4271);
+ const clear=Packet.alloc(1);clear.p1(0);clear.pos=0;dispatch(c,ServerProt.HINT_ARROW,clear,1);expect(c.hintType).toBe(0);
+});

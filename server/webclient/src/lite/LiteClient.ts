@@ -112,6 +112,11 @@ export class LiteClient {
     sideIcon: number[] = [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1];
     activeIcon = 0;
     tutFlashIcon = -1;
+    hintType = 0;
+    hintNpc = 0;
+    hintPlayer = 0;
+    hintTileX = 0;
+    hintTileZ = 0;
     minusedlevel = 0;
     mapBuildBaseX = 0;
     mapBuildBaseZ = 0;

@@ -409,6 +409,7 @@ export interface OpFeedbackState {
 }
 
 export interface BotState {
+    hint?: import('../../../../sdk/types').BotWorldState['hint'];
     tabs?: import('../../../../sdk/types').BotWorldState['tabs'];
     tick: number;
     /** Monotonic publication cursor; advances for each state sent to agents. */
