@@ -1329,7 +1329,7 @@ export class BotSDK {
             };
         }
 
-        return this.sendClickComponent(option.componentId);
+        return option.operationIndex!==undefined ? this.sendClickComponentWithOption(option.componentId,option.operationIndex,option.slot??0) : this.sendClickComponent(option.componentId);
     }
 
     /**
@@ -1353,7 +1353,7 @@ export class BotSDK {
                 reason: 'no_match',
             };
         }
-        return this.sendClickComponent(option.componentId);
+        return option.operationIndex!==undefined ? this.sendClickComponentWithOption(option.componentId,option.operationIndex,option.slot??0) : this.sendClickComponent(option.componentId);
     }
 
     /** Accept character design in tutorial. */

@@ -1,3 +1,6 @@
+import {inventoryInterfaceOptions} from '#/bot/interface-inventory-options.js';
+import type {InterfaceOption} from '../../../../sdk/types';
+import {selectClientTab} from '#/bot/tabs.js';
 // The client-side action + accessor surface the bot bridge calls.
 //
 // Ported from the rs-sdk bot methods inside Client.ts. Two rules govern every
@@ -422,11 +425,8 @@ export function clickInterfaceIop(c: LiteClient, componentId: number, optionInde
 }
 
 export function setTab(c: LiteClient, tabIndex: number): boolean {
-    if (!c.isInGame() || tabIndex < 0 || tabIndex > 13) {
-        return false;
-    }
-    c.activeIcon = tabIndex;
-    return true;
+    if(!c.isInGame())return false;
+    return selectClientTab(c,tabIndex,index=>{c.writeOpcode(ClientProt.TUT_CLICKSIDE);c.out.p1(index);});
 }
 
 export function closeBotModal(c: LiteClient): boolean {
@@ -578,8 +578,8 @@ export function getDialogText(c: LiteClient): string[] {
     return texts;
 }
 
-export function getInterfaceOptions(c: LiteClient): Array<{ index: number; text: string; componentId: number }> {
-    const options: Array<{ index: number; text: string; componentId: number }> = [];
+export function getInterfaceOptions(c: LiteClient): InterfaceOption[] {
+    const options: InterfaceOption[] = [];
     if (c.mainModalId === -1) {
         return options;
     }
@@ -605,6 +605,7 @@ export function getInterfaceOptions(c: LiteClient): Array<{ index: number; text:
     };
 
     scan(c.mainModalId);
+    options.push(...inventoryInterfaceOptions(c.mainModalId,IfType.list,id=>ObjType.list(id).name,options.length));
     return options;
 }
 

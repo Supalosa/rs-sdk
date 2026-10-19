@@ -1136,31 +1136,35 @@ export class BotActions {
         // route can move 5+ tiles every iteration while never getting closer.
         let bestRemaining = distTo(pos);
 
-        // Try to open a blocking door. Returns true if door was opened.
+        // Recovery must use evidence from the current route, never a nearby
+        // unrelated door: some doors teleport the player through and close
+        // again, so opening the nearest one can pull us back into a room.
+        let pendingRouteDoors: ReturnType<typeof findDoorsAlongPath> = [];
+        const refreshPosition = () => {
+            const player = this.sdk.getState()?.player;
+            if (player) pos = { x: player.worldX, z: player.worldZ };
+        };
         const tryOpenDoor = async (): Promise<boolean> => {
             if (doorRetryCount >= MAX_DOOR_RETRIES) return false;
-            if (await this.helpers.tryOpenBlockingDoor()) {
-                doorRetryCount++;
-                await this.sdk.waitForTicks(1);
-                return true;
-            }
-            // Door open failed — block the nearest openable door in pathfinding
-            // so subsequent path queries route around it
+            refreshPosition();
+            const level = this.sdk.getState()?.player?.level ?? 0;
             const nearest = this.sdk.getNearbyLocs()
+                .filter(l => pendingRouteDoors.some(d => d.level === level && d.x === l.x && d.z === l.z))
                 .filter(l => l.optionsWithIndex.some(o => /^open$/i.test(o.text)))
-                .filter(l => l.distance <= 15)
-                .sort((a, b) => a.distance - b.distance)[0];
-            if (nearest) {
-                const level = this.sdk.getState()?.player?.level ?? 0;
-                const key = `${nearest.x},${nearest.z}`;
-                const fails = (doorFailCounts.get(key) ?? 0) + 1;
-                doorFailCounts.set(key, fails);
-                // Temporarily exclude after repeated reach failures. The
-                // session-owned evidence expires automatically.
-                if (fails >= 3 && !this.sdk.isDoorTemporarilyBlocked(level, nearest.x, nearest.z)) {
-                    this.sdk.blockDoorTemporarily(level, nearest.x, nearest.z);
-                    console.log(`[walkTo] Temporarily avoiding impassable door at (${nearest.x}, ${nearest.z}) — re-routing`);
-                }
+                .filter(l => this.helpers.distance(pos.x, pos.z, l.x, l.z) <= 2)
+                .filter(l => !this.sdk.isDoorTemporarilyBlocked(level, l.x, l.z))
+                .sort((a, b) => this.helpers.distance(pos.x, pos.z, a.x, a.z) - this.helpers.distance(pos.x, pos.z, b.x, b.z))[0];
+            if (!nearest) return false;
+            doorRetryCount++;
+            const result = await this.helpers.openDoorAt(nearest.x, nearest.z);
+            await this.sdk.waitForTicks(1);
+            refreshPosition();
+            if (result === 'opened') return true;
+            const key = `${nearest.x},${nearest.z}`;
+            const fails = (doorFailCounts.get(key) ?? 0) + 1;
+            doorFailCounts.set(key, fails);
+            if (result === 'locked' || fails >= 3) {
+                this.sdk.blockDoorTemporarily(level, nearest.x, nearest.z);
             }
             return false;
         };
@@ -1170,6 +1174,9 @@ export class BotActions {
             if (stale) return stale;
             const dead = diedEnRoute();
             if (dead) return dead;
+
+            refreshPosition();
+            if (distTo(pos) <= tolerance) return { success: true, message: 'Arrived' };
 
             // Try pathfinding (with one retry)
             let path = await this.sdk.sendFindPath(x, z, 500);
@@ -1213,13 +1220,14 @@ export class BotActions {
             lastPartialEnd = partial ? { x: endWp.x, z: endWp.z } : null;
 
             // Identify doors the path crosses through so we can open them proactively
-            const requiredDoors = findDoorsAlongPath(path.waypoints);
+            const requiredDoors = findDoorsAlongPath(path.waypoints, pos);
+            pendingRouteDoors = requiredDoors;
             const requiredDoorKeys = new Set(requiredDoors.map(d => `${d.x},${d.z}`));
 
             // Walk waypoints
             let consecutiveStuck = 0;
 
-            for (const wp of path.waypoints) {
+            waypoints: for (const wp of path.waypoints) {
                 const stale = await ensureFreshState();
                 if (stale) return stale;
                 // Proactively open doors the path requires — only when we're close enough to see them
@@ -1237,20 +1245,28 @@ export class BotActions {
                             // Find which required door is closest to this waypoint
                             for (const door of requiredDoors) {
                                 const dk = `${door.x},${door.z}`;
-                                if (this.sdk.isDoorTemporarilyBlocked(door.level, door.x, door.z)) break;
+                                if (!requiredDoorKeys.has(dk) || this.sdk.isDoorTemporarilyBlocked(door.level, door.x, door.z)) continue;
                                 const doorDist = Math.abs(door.x - wp.x) + Math.abs(door.z - wp.z);
                                 if (doorDist <= 1) {
                                     const result = await this.helpers.openDoorAt(door.x, door.z);
                                     if (result === 'opened' || result === 'already_open') {
                                         requiredDoorKeys.delete(dk);
-                                        await this.sdk.waitForTicks(1);
+                                        pendingRouteDoors = requiredDoors.filter(d => requiredDoorKeys.has(`${d.x},${d.z}`));
+                                        if (result === 'opened') {
+                                            // Door scripts can move us across the doorway. Old
+                                            // waypoints may now be behind us: discard them.
+                                            await this.sdk.waitForTicks(1);
+                                            refreshPosition();
+                                            break waypoints;
+                                        }
                                     } else if (result === 'locked') {
                                         // Definitely locked right now — avoid it for
                                         // this session's next path queries.
                                         this.sdk.blockDoorTemporarily(door.level, door.x, door.z);
                                         requiredDoorKeys.delete(dk);
                                         console.log(`[walkTo] Temporarily avoiding locked door at (${door.x}, ${door.z}) — re-routing`);
-                                        break; // Re-query path on next iteration
+                                        refreshPosition();
+                                        break waypoints; // Re-query instead of walking the stale route
                                     } else {
                                         // A door present in static collision can be absent from the
                                         // current Lite map. That is not a failed open attempt: continue
@@ -1270,7 +1286,8 @@ export class BotActions {
                                         } else {
                                             console.log(`[walkTo] Door at (${door.x}, ${door.z}) ${result} (attempt ${fails}/3) — retrying`);
                                         }
-                                        break; // Re-query path on next iteration
+                                        refreshPosition();
+                                        break waypoints; // Re-query instead of walking the stale route
                                     }
                                     break;
                                 }
@@ -1305,6 +1322,8 @@ export class BotActions {
             // Progress = closing on the destination. bestRemaining is a
             // monotone minimum, so an oscillating route (walk out, walk back)
             // cannot keep resetting the counter the way distance-moved did.
+            refreshPosition();
+            if (distTo(pos) <= tolerance) return { success: true, message: 'Arrived' };
             const remaining = distTo(pos);
             if (remaining < bestRemaining) {
                 bestRemaining = remaining;

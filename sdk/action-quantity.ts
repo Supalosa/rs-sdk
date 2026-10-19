@@ -32,7 +32,7 @@ export function resolveInterfaceOption(
     selector: InterfaceOptionSelector,
 ): InterfaceOption | null {
     if (typeof selector === 'object' && !(selector instanceof RegExp)) {
-        return options.find(option => option.componentId === selector.componentId) ?? null;
+        return options.find(option => option.componentId === selector.componentId && option.slot === selector.slot && option.itemId === selector.itemId && option.operationIndex === selector.operationIndex) ?? null;
     }
     return options.find(option => testPattern(selector, option.text)) ?? null;
 }

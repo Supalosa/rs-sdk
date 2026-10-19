@@ -387,7 +387,7 @@ if (!botName) {
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 const envPath = `${repoRoot}bots/${botName}/bot.env`;
-const env = Object.fromEntries(
+const env = process.env.BOT_USERNAME && process.env.PASSWORD ? process.env : Object.fromEntries(
     (await Bun.file(envPath).text())
         .split('\n')
         .filter(l => l.includes('=') && !l.startsWith('#'))

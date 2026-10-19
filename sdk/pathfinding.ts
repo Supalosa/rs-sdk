@@ -233,7 +233,8 @@ export function isZoneLikelyLand(level: number, x: number, z: number): boolean {
  * beside a door tile rather than onto it).  Results are in path order.
  */
 export function findDoorsAlongPath(
-    waypoints: Array<{ x: number; z: number; level: number }>
+    waypoints: Array<{ x: number; z: number; level: number }>,
+    start?: { x: number; z: number }
 ): DoorInfo[] {
     const doors: DoorInfo[] = [];
     const seen = new Set<string>();
@@ -255,6 +256,26 @@ export function findDoorsAlongPath(
         }
     }
 
+    if (start) {
+        // A door beside a waypoint need not be crossed. In particular, once
+        // a scripted door has moved us through it, it is behind the route.
+        // Straight walls occupy an edge, not the whole tile: W/N/E/S.
+        return doors.filter(door => {
+            if (door.shape !== 0) return true;
+            const xAxis = door.angle === 0 || door.angle === 2;
+            const edge = (xAxis ? door.x : door.z) + (door.angle === 0 || door.angle === 3 ? -0.5 : 0.5);
+            const points = [start, ...waypoints];
+            return points.slice(1).some((b, i) => {
+                const a = points[i]!;
+                const from = xAxis ? a.x : a.z;
+                const to = xAxis ? b.x : b.z;
+                if ((from < edge) === (to < edge)) return false;
+                const fraction = (edge - from) / (to - from);
+                const along = xAxis ? a.z + fraction * (b.z - a.z) : a.x + fraction * (b.x - a.x);
+                return Math.abs(along - (xAxis ? door.z : door.x)) <= 1;
+            });
+        });
+    }
     return doors;
 }
 

@@ -365,6 +365,7 @@ export interface CombatEvent {
 }
 
 export interface DialogState {
+    countInputOpen?: boolean;
     isOpen: boolean;
     options: Array<{ index: number; text: string; componentId?: number; buttonType?: number }>;
     isWaiting: boolean;
@@ -375,7 +376,7 @@ export interface DialogState {
 export interface InterfaceState {
     isOpen: boolean;
     interfaceId: number;
-    options: Array<{ index: number; text: string }>;
+    options: import('../../../../sdk/types').InterfaceOption[];
 }
 
 export interface PrayerState {
@@ -408,6 +409,7 @@ export interface OpFeedbackState {
 }
 
 export interface BotState {
+    tabs?: import('../../../../sdk/types').BotWorldState['tabs'];
     tick: number;
     /** Monotonic publication cursor; advances for each state sent to agents. */
     revision: number;
@@ -415,6 +417,7 @@ export interface BotState {
     skills: SkillState[];
     inventory: InventoryItem[];
     equipment: InventoryItem[];
+    quests?: import('../../../../sdk/types').QuestState;
     combatStyle: CombatStyleState;
     nearbyNpcs: NearbyNpc[];
     nearbyPlayers: NearbyPlayer[];

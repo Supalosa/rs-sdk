@@ -1,3 +1,7 @@
+import {inventoryInterfaceOptions} from '#/bot/interface-inventory-options.js';
+import type {InterfaceOption} from '../../../../sdk/types';
+import {selectClientTab} from '#/bot/tabs.js';
+import {claimBrowserControl,releaseBrowserControl} from '../bot/ClientHandoff';
 import { MarketSearchInput, RESULT_ICON, visibleSearchComponent, SEARCH_FIELD } from '#/client/MarketSearchInput.js';
 import { playWave, setWaveVolume } from '#3rdparty/audio.js';
 import { stopMidi, setMidiVolume, playMidi } from '#3rdparty/tinymidipcm.js';
@@ -2798,8 +2802,8 @@ export class Client extends GameShell {
     /**
      * Get available interface options from the current viewport interface
      */
-    getInterfaceOptions(): Array<{ index: number; text: string; componentId: number }> {
-        const options: Array<{ index: number; text: string; componentId: number }> = [];
+    getInterfaceOptions(): InterfaceOption[] {
+        const options: InterfaceOption[] = [];
 
         if (this.mainModalId === -1) {
             return options;
@@ -2844,6 +2848,7 @@ export class Client extends GameShell {
         };
 
         scanComponent(this.mainModalId);
+        options.push(...inventoryInterfaceOptions(this.mainModalId,IfType.list,id=>ObjType.list(id).name,options.length));
         return options;
     }
 
@@ -2862,7 +2867,7 @@ export class Client extends GameShell {
         const interfaceOptions = this.getInterfaceOptions();
         if (optionIndex > 0 && optionIndex <= interfaceOptions.length) {
             const option = interfaceOptions[optionIndex - 1];
-            return this.clickComponent(option.componentId);
+            return option.operationIndex!==undefined ? this.clickInterfaceIop(option.componentId,option.operationIndex,option.slot??0) : this.clickComponent(option.componentId);
         }
         return false;
     }
@@ -2896,15 +2901,9 @@ export class Client extends GameShell {
      * Switch to a specific tab (0-13)
      */
     setTab(tabIndex: number): boolean {
-        if (!this.ingame || tabIndex < 0 || tabIndex > 13) {
-            return false;
-        }
-        if (this.sideIcon[tabIndex] === -1) {
-            return false;
-        }
-        this.activeIcon = tabIndex;
-        this.redrawSide = true;
-        this.redrawIcons = true;
+        if(!this.ingame)return false;
+        if(!selectClientTab(this,tabIndex,index=>{this.writePacketOpcode(ClientProt.TUT_CLICKSIDE);this.out.p1(index);}))return false;
+        this.redrawSide=true;this.redrawIcons=true;
         return true;
     }
 
@@ -4181,6 +4180,12 @@ export class Client extends GameShell {
                 return;
             }
 
+            if(ENABLE_BOT_SDK && !await claimBrowserControl(username)){
+                this.loginMes1='Waiting for headless client to disconnect.';
+                this.loginMes2='Please try logging in again.';
+                return;
+            }
+
             if (!reconnect) {
                 this.loginMes1 = '';
                 this.loginMes2 = 'Connecting to server...';
@@ -4940,13 +4945,15 @@ export class Client extends GameShell {
 
         // Hide Bot SDK overlay on logout
         if (this.botOverlay) {
-            this.botOverlay.hide();
+            this.botOverlay.destroy();
+            this.botOverlay=null;
         }
 
         if (this.stream) {
             this.stream.close();
         }
 
+        releaseBrowserControl();
         this.stream = null;
         this.ingame = false;
         this.loginscreen = 0;

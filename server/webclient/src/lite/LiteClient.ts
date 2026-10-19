@@ -111,6 +111,7 @@ export class LiteClient {
     mainOverlayId = -1;
     sideIcon: number[] = [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1];
     activeIcon = 0;
+    tutFlashIcon = -1;
     minusedlevel = 0;
     mapBuildBaseX = 0;
     mapBuildBaseZ = 0;
@@ -819,7 +820,7 @@ export class LiteClient {
     getDialogText(): string[] {
         return A.getDialogText(this);
     }
-    getInterfaceOptions(): Array<{ index: number; text: string; componentId: number }> {
+    getInterfaceOptions(): import('../../../../sdk/types').InterfaceOption[] {
         return A.getInterfaceOptions(this);
     }
     debugDialogComponents(): Array<{ id: number; type: number; buttonType: number; option: string; text: string }> {
@@ -924,10 +925,10 @@ export class LiteClient {
             }
         }
 
-        const interfaceOptions: Array<{ index: number; text: string; componentId: number }> = [];
+        const interfaceOptions: import('../../../../sdk/types').InterfaceOption[] = [];
         if (this.isViewportInterfaceOpen()) {
             for (const opt of this.getInterfaceOptions()) {
-                interfaceOptions.push({ index: opt.index, text: opt.text, componentId: opt.componentId });
+                interfaceOptions.push({ ...opt });
             }
         }
 
@@ -935,6 +936,7 @@ export class LiteClient {
             ...baseState,
             dialog: {
                 ...baseState.dialog,
+                countInputOpen: this.dialogInputOpen,
                 isOpen: this.isDialogOpen(),
                 options: dialogOptions,
                 isWaiting: this.isWaitingForDialog(),

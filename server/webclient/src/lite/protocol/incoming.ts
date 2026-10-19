@@ -287,6 +287,11 @@ export function dispatch(c: LiteClient, opcode: number, buf: Packet, psize: numb
             }
             return;
         }
+        case ServerProt.TUT_FLASH: {
+            c.tutFlashIcon=buf.g1();
+            if(c.tutFlashIcon===c.activeIcon)c.activeIcon=c.tutFlashIcon===3?1:3;
+            return;
+        }
         case ServerProt.TUT_OPEN: {
             const comId = buf.g2b();
             c.tutComId = comId;

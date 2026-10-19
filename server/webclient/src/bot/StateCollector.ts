@@ -1,3 +1,4 @@
+import {collectTabs} from './tabs';
 // StateCollector.ts - Collects game state from the client
 // Extracts all relevant game data for bot decision-making
 
@@ -6,6 +7,7 @@ import type ClientNpc from '#/dash3d/ClientNpc.js';
 import type ClientPlayer from '#/dash3d/ClientPlayer.js';
 import type ClientObj from '#/dash3d/ClientObj.js';
 import IfType from '#/config/IfType.js';
+import { collectQuestState } from './quest-state';
 import { collectGEState } from './ge-state.js';
 import { getDialogPageId } from './dialog-page.js';
 import ObjType from '#/config/ObjType.js';
@@ -183,7 +185,9 @@ export class BotStateCollector implements ScanProvider {
             ge: collectGEState(IfType.list, c.mainModalId ?? -1),
             inGame: c.ingame || false,
             combatEvents: [...this.combatEvents], // Return copy of events
-            dialog: this.collectDialogState(),
+            dialog: { ...this.collectDialogState(), countInputOpen: c.isChatBackInputOpen?.() ?? false },
+            tabs: collectTabs(c,IfType.list),
+            quests: collectQuestState(IfType.list, c.var ?? [], c.mainModalId ?? -1),
             interface: this.collectInterfaceState(),
             modalOpen: (c.mainModalId ?? -1) !== -1,
             modalInterface: c.mainModalId ?? -1,
@@ -379,10 +383,10 @@ export class BotStateCollector implements ScanProvider {
 
         // Get interface options using client's method if available
         // Include componentId so SDK can click directly without lookup
-        let options: Array<{ index: number; text: string; componentId: number }> = [];
+        let options: import('../../../../sdk/types').InterfaceOption[] = [];
         if (isOpen && typeof this.client.getInterfaceOptions === 'function') {
             const rawOptions = this.client.getInterfaceOptions();
-            options = rawOptions.map((opt: any) => ({ index: opt.index, text: opt.text, componentId: opt.componentId }));
+            options = rawOptions.map((opt: any) => ({ ...opt }));
         }
 
         return { isOpen, interfaceId, options };

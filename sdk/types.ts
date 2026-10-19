@@ -251,6 +251,8 @@ export interface DialogComponent {
 }
 
 export interface DialogState {
+    /** True while a server numeric Enter Amount prompt is open. */
+    countInputOpen?: boolean;
     isOpen: boolean;
     options: DialogOption[];
     isWaiting: boolean;
@@ -258,6 +260,12 @@ export interface DialogState {
     pageId?: string;
     text?: string;
     allComponents?: DialogComponent[];
+}
+export interface QuestState {
+    available: boolean;
+    points?: number;
+    entries: {id:number;name:string;status:'not_started'|'in_progress'|'completed'|'unknown';progress?:number}[];
+    journal?: {questId?:number;title:string;lines:string[]};
 }
 
 export interface InterfaceState {
@@ -268,6 +276,10 @@ export interface InterfaceState {
 
 /** A clickable viewport-interface option as published in world state. */
 export interface InterfaceOption {
+    /** Inventory-style menu operation metadata (smithing/crafting). */
+    slot?: number;
+    itemId?: number;
+    operationIndex?: number;
     /**
      * Human-facing 1-based ordinal, for display only. Never pass this to
      * `sendClickInterfaceOption`, which takes a 0-based array position — use
@@ -551,6 +563,7 @@ export interface OpFeedbackState {
 }
 
 export interface BotWorldState {
+    tabs?: {active:number;flashing:number|null;available:{index:number;name:string}[];tutorialText:string[]};
     tick: number;
     /** Tick on which an updated Lite runner already emitted policy-gated KBD op2. */
     fastKbdAttackTick?: number;
@@ -565,6 +578,7 @@ export interface BotWorldState {
     skills: SkillState[];
     inventory: InventoryItem[];
     equipment: InventoryItem[];
+    quests?: QuestState;
     nearbyNpcs: NearbyNpc[];
     nearbyPlayers: NearbyPlayer[];
     nearbyLocs: NearbyLoc[];
