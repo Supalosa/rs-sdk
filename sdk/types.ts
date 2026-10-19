@@ -563,7 +563,7 @@ export interface OpFeedbackState {
 }
 
 export interface BotWorldState {
-    tabs?: {active:number;flashing:number|null;available:{index:number;name:string}[];tutorialText:string[]};
+    tabs?: {running?:boolean;active:number;flashing:number|null;available:{index:number;name:string}[];tutorialText:string[]};
     tick: number;
     /** Tick on which an updated Lite runner already emitted policy-gated KBD op2. */
     fastKbdAttackTick?: number;
