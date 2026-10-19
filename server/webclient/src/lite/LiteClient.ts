@@ -142,7 +142,6 @@ export class LiteClient {
     playerOp: (string | null)[] = [null, null, null, null, null];
     playerOpPriority: boolean[] = [false, false, false, false, false];
     tutComId = -1;
-    hintType = 0;
     dialogHistory: Array<{ text: string[]; tick: number; interfaceId: number }> = [];
     lastCapturedDialogId = -1;
     designGender = true;

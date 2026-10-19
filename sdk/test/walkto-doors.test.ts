@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { BotSDK } from '../index';
 import { BotActions } from '../actions';
-import { findDoorsAlongPath, initPathfinding } from '../pathfinding';
+import { findDoorsAlongPath, planDoorRoute, initPathfinding } from '../pathfinding';
 
 initPathfinding();
 const door = { x: 3125, z: 3124, level: 0 };
@@ -66,7 +66,7 @@ describe('walkTo door recovery', () => {
         (bot as any).helpers.tryOpenBlockingDoor = async () => { throw Error('Must not open the nearest unrelated door'); };
         const result = await bot.walkTo(3122, 3102, 0);
         expect(result.success).toBe(false);
-        expect(result.message).toContain('stops');
+        expect(result.message).toContain('player actually at');
         expect(opens).toBe(0);
         expect(pos).toEqual({ x: 3122, z: 3119 });
     });
@@ -84,4 +84,32 @@ describe('walkTo door recovery', () => {
         expect(result.success).toBe(false);
         expect(walked).toEqual([]);
     });
+});
+
+test('compressed routes detect the advisor exit between waypoints and insert an approach tile',()=>{
+ const route=planDoorRoute([{x:3133,z:3124,level:0}],{x:3125,z:3124});
+ expect(route.doors).toContainEqual(expect.objectContaining({x:3130,z:3124}));
+ expect(route.waypoints).toEqual([{x:3129,z:3124,level:0},{x:3133,z:3124,level:0}]);
+});
+test('door edge detection works in reverse and excludes travel parallel to the wall', () => {
+    const exit = { x: 3130, z: 3124 };
+    const reverse = planDoorRoute([{ x: 3125, z: 3124, level: 0 }], { x: 3133, z: 3124 });
+    expect(reverse.doors).toContainEqual(expect.objectContaining(exit));
+    expect(reverse.waypoints).toContainEqual({ x: 3130, z: 3124, level: 0 });
+    const parallel = planDoorRoute([{ x: 3130, z: 3128, level: 0 }], { x: 3130, z: 3120 });
+    expect(parallel.doors).not.toContainEqual(expect.objectContaining(exit));
+});
+test('real bank route crosses both auto-closing doors without being trapped in the advisor room',async()=>{
+ const {sdk,bot,pos,walked}=makeBot();Object.assign(pos,{x:3122,z:3116});
+ const opened:number[]=[];
+ (sdk as any).getNearbyLocs=()=>[3125,3130].map(x=>({x,z:3124,id:x===3125?3024:3025,optionsWithIndex:[{text:'Open',opIndex:1}]}));
+ // Use actual bundled geometry and the SDK path query, without any NPC collision.
+ (bot as any).helpers.openDoorAt=async(x:number,z:number)=>{opened.push(x);Object.assign(pos,{x,z});return 'opened';};
+ (bot as any).helpers.walkStepToward=async(x:number,z:number)=>{
+  const crossed=findDoorsAlongPath([{x,z,level:0}],pos);
+  if(crossed.length)return{status:'stuck',pos:{...pos}};
+  walked.push({x,z});Object.assign(pos,{x,z});return{status:'arrived',pos:{...pos}};
+ };
+ const result=await bot.walkTo(3133,3124,0);
+ expect(result.success).toBe(true);expect(pos).toEqual({x:3133,z:3124});expect(opened).toEqual([3125,3130]);
 });

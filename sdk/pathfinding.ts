@@ -227,56 +227,58 @@ export function isZoneLikelyLand(level: number, x: number, z: number): boolean {
 //  DOOR PATH ANALYSIS — identify doors a computed path crosses through
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Given a list of waypoints, return the doors the path passes through or
- * steps adjacent to (wall collision is directional so the path may step
- * beside a door tile rather than onto it).  Results are in path order.
+type Waypoint = {x:number;z:number;level:number};
+function routeTiles(waypoints:Waypoint[],start?:{x:number;z:number}){
+    const tiles:Array<Waypoint & {original:boolean}>=[];
+    let previous=start?{...start,level:waypoints[0]?.level??0}:undefined;
+    if(previous)tiles.push({...previous,original:false});
+    for(const wp of waypoints){
+        if(!previous){tiles.push({...wp,original:true});previous=wp;continue;}
+        const steps=Math.max(Math.abs(wp.x-previous.x),Math.abs(wp.z-previous.z));
+        if(!steps){if(tiles.length)tiles[tiles.length-1]!.original=true;}
+        for(let n=1;n<=steps;n++)tiles.push({x:previous.x+Math.round((wp.x-previous.x)*n/steps),z:previous.z+Math.round((wp.z-previous.z)*n/steps),level:wp.level,original:n===steps});
+        previous=wp;
+    }
+    return tiles;
+}
+function crossesDoor(door:DoorInfo,a:Waypoint,b:Waypoint){
+    if(door.level!==b.level)return false;
+    const crossesEdge=(angle:number)=>{
+        const xAxis=angle===0||angle===2;
+        const edge=(xAxis?door.x:door.z)+(angle===0||angle===3?-0.5:0.5);
+        const from=xAxis?a.x:a.z,to=xAxis?b.x:b.z;
+        if((from<edge)===(to<edge))return false;
+        const fraction=(edge-from)/(to-from);
+        const along=xAxis?a.z+fraction*(b.z-a.z):a.x+fraction*(b.x-a.x);
+        return Math.abs(along-(xAxis?door.z:door.x))<=0.5;
+    };
+    if(door.shape===0)return crossesEdge(door.angle);
+    if(door.shape===2)return crossesEdge(door.angle)||crossesEdge((door.angle+1)%4);
+    // Diagonal door shapes retain the conservative adjacency handling.
+    return Math.abs(b.x-door.x)+Math.abs(b.z-door.z)<=1;
+}
+/** Inspect every crossed tile edge, including doors between compressed waypoints.
+ * Add approach points on the original route so walkTo actually opens each door
+ * before trying to traverse it. Scripted door moves must still trigger replan.
  */
-export function findDoorsAlongPath(
-    waypoints: Array<{ x: number; z: number; level: number }>,
-    start?: { x: number; z: number }
-): DoorInfo[] {
-    const doors: DoorInfo[] = [];
-    const seen = new Set<string>();
-
-    for (const wp of waypoints) {
-        // Check the waypoint tile and its 4 cardinal neighbours
-        const candidates = [
-            doorKey(wp.level, wp.x, wp.z),
-            doorKey(wp.level, wp.x, wp.z + 1),
-            doorKey(wp.level, wp.x, wp.z - 1),
-            doorKey(wp.level, wp.x + 1, wp.z),
-            doorKey(wp.level, wp.x - 1, wp.z),
-        ];
-        for (const key of candidates) {
-            if (!seen.has(key) && doorIndex.has(key)) {
-                seen.add(key);
-                doors.push(doorIndex.get(key)!);
-            }
+export function planDoorRoute(waypoints:Waypoint[],start?:{x:number;z:number}):{waypoints:Waypoint[];doors:DoorInfo[]}{
+    if(!initialized)initPathfinding();
+    const tiles=routeTiles(waypoints,start),doors:DoorInfo[]=[],result:Waypoint[]=[],seen=new Set<string>();
+    const append=(wp:Waypoint)=>{const last=result[result.length-1];if(!last||last.x!==wp.x||last.z!==wp.z||last.level!==wp.level)result.push({x:wp.x,z:wp.z,level:wp.level});};
+    for(let i=0;i<tiles.length;i++){
+        const tile=tiles[i]!,previous=tiles[i-1];
+        for(const [x,z] of [[tile.x,tile.z],[tile.x+1,tile.z],[tile.x-1,tile.z],[tile.x,tile.z+1],[tile.x,tile.z-1]]){
+            const key=doorKey(tile.level,x!,z!),door=doorIndex.get(key);
+            if(!door||seen.has(key))continue;
+            if(previous?!crossesDoor(door,previous,tile):!!start)continue;
+            seen.add(key);doors.push(door);if(previous)append(previous);
         }
+        if(tile.original)append(tile);
     }
-
-    if (start) {
-        // A door beside a waypoint need not be crossed. In particular, once
-        // a scripted door has moved us through it, it is behind the route.
-        // Straight walls occupy an edge, not the whole tile: W/N/E/S.
-        return doors.filter(door => {
-            if (door.shape !== 0) return true;
-            const xAxis = door.angle === 0 || door.angle === 2;
-            const edge = (xAxis ? door.x : door.z) + (door.angle === 0 || door.angle === 3 ? -0.5 : 0.5);
-            const points = [start, ...waypoints];
-            return points.slice(1).some((b, i) => {
-                const a = points[i]!;
-                const from = xAxis ? a.x : a.z;
-                const to = xAxis ? b.x : b.z;
-                if ((from < edge) === (to < edge)) return false;
-                const fraction = (edge - from) / (to - from);
-                const along = xAxis ? a.z + fraction * (b.z - a.z) : a.x + fraction * (b.x - a.x);
-                return Math.abs(along - (xAxis ? door.z : door.x)) <= 1;
-            });
-        });
-    }
-    return doors;
+    return {waypoints:result,doors};
+}
+export function findDoorsAlongPath(waypoints:Waypoint[],start?:{x:number;z:number}):DoorInfo[]{
+    return planDoorRoute(waypoints,start).doors;
 }
 
 /** Look up a door at an exact position. */

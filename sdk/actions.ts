@@ -7,7 +7,7 @@ import { throwIfExecutionAborted, withExecutionDeadline } from './execution-cont
 import { GEActions } from './ge-actions';
 import type { GEOfferRequest, GEActionResult } from './ge-types';
 import { ActionHelpers, ALREADY_FIGHTING_REFUSALS, NO_RUNES_REFUSALS } from './actions-helpers';
-import { findDoorsAlongPath, isTileWalkable } from './pathfinding';
+import { findDoorsAlongPath, planDoorRoute, isTileWalkable } from './pathfinding';
 import type {
     ActionResult,
     BotWorldState,
@@ -1211,7 +1211,7 @@ export class BotActions {
                     const short = Math.round(this.helpers.distance(endWp.x, endWp.z, x, z));
                     return {
                         success: false,
-                        message: `Path to (${x}, ${z}) stops ${short} tiles short at (${endWp.x}, ${endWp.z}) - the rest is unroutable from here (locked door or separate room?)`
+                        message: `Computed path to (${x}, ${z}) ends ${short} tiles short at (${endWp.x}, ${endWp.z}); player actually at (${pos.x}, ${pos.z}). No route beyond that computed endpoint (locked door or separate room?)`
                     };
                 }
                 lastPartialEnd = null;
@@ -1220,7 +1220,9 @@ export class BotActions {
             lastPartialEnd = partial ? { x: endWp.x, z: endWp.z } : null;
 
             // Identify doors the path crosses through so we can open them proactively
-            const requiredDoors = findDoorsAlongPath(path.waypoints, pos);
+            const route = planDoorRoute(path.waypoints, pos);
+            path.waypoints = route.waypoints;
+            const requiredDoors = route.doors;
             pendingRouteDoors = requiredDoors;
             const requiredDoorKeys = new Set(requiredDoors.map(d => `${d.x},${d.z}`));
 
@@ -1330,7 +1332,7 @@ export class BotActions {
                 poorProgressCount = 0;
             } else if (++poorProgressCount >= 3) {
                 if (!await tryOpenDoor()) {
-                    return { success: false, message: `Stuck at (${pos.x}, ${pos.z})` };
+                    return { success: false, reason: 'no_route_progress', message: `Route made no progress toward (${x}, ${z}); player at (${pos.x}, ${pos.z})` };
                 }
                 poorProgressCount = 0;
             }

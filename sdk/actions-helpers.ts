@@ -435,7 +435,9 @@ export class ActionHelpers {
      */
     async openDoorAt(doorX: number, doorZ: number): Promise<'opened' | 'already_open' | 'locked' | 'cant_reach' | 'not_found'> {
         const locs = this.sdk.getNearbyLocs();
-        const door = locs.find(l => l.x === doorX && l.z === doorZ);
+        const atTile = locs.filter(l => l.x === doorX && l.z === doorZ);
+        const door = atTile.find(l => l.optionsWithIndex.some(o => /^open$/i.test(o.text)))
+            ?? atTile.find(l => l.optionsWithIndex.some(o => /^close$/i.test(o.text)));
         if (!door) return 'not_found';
 
         const openOpt = door.optionsWithIndex.find(o => /^open$/i.test(o.text));

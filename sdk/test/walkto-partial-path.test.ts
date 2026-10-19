@@ -74,7 +74,7 @@ describe('walkTo() partial paths', () => {
         const result = await bot.walkTo(3185, 3436, 2);
 
         expect(result.success).toBe(false);
-        expect(result.message).toContain('stops');
+        expect(result.message).toContain('player actually at');
         expect(result.message).toContain('(3164, 3435)');
         // One walked partial path + one re-query that detects the repeat -
         // not 50 iterations of re-walking the same route.

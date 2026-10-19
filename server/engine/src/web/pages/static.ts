@@ -139,7 +139,8 @@ export function handlePublicFiles(url: URL): Response | null {
     if (webclientPath && fs.existsSync(webclientPath) && fs.statSync(webclientPath).isFile()) {
         return new Response(Bun.file(webclientPath), {
             headers: {
-                'Content-Type': MIME_TYPES.get(path.extname(url.pathname ?? '')) ?? 'text/plain'
+                'Content-Type': MIME_TYPES.get(path.extname(url.pathname ?? '')) ?? 'text/plain',
+                'Cache-Control': 'no-cache'
             }
         });
     }

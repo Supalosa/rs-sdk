@@ -1,3 +1,4 @@
+import {statSync} from 'node:fs';
 import ejs from 'ejs';
 
 import { CrcBuffer } from '#/cache/CrcTable.js';
@@ -11,6 +12,11 @@ import Environment from '#/util/Environment.js';
 // start (i.e. every deploy/restart). Without this, the import URL is static and the browser
 // caches the old client indefinitely (no version query + no cache headers historically).
 const CLIENT_CACHEBUST = Date.now().toString(36);
+// Rebuilds can happen without an engine restart. Version the actual bundle too.
+function bundleCachebust(variant:'bot'|'standard'){
+    try{const stat=statSync(`../webclient/out/${variant}/client.js`);return `${CLIENT_CACHEBUST}-${stat.mtimeMs}-${stat.size}`;}
+    catch{return CLIENT_CACHEBUST;}
+}
 
 export async function handleClientPage(url: URL): Promise<Response | null> {
     // Bot client at / and /bot
@@ -26,7 +32,7 @@ export async function handleClientPage(url: URL): Promise<Response | null> {
             geEnabled: Environment.GE_ENABLED,
             maxMessageLength: Environment.node.maxMessageLength,
             profanityFilter: Environment.NODE_PROFANITY_FILTER,
-            cachebust: CLIENT_CACHEBUST,
+            cachebust: bundleCachebust('bot'),
             per_deployment_token: Environment.WEB_SOCKET_TOKEN_PROTECTION ? getPublicPerDeploymentToken() : ''
         }), {
             headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' }
@@ -42,7 +48,7 @@ export async function handleClientPage(url: URL): Promise<Response | null> {
             lowmem,
             members: Environment.NODE_MEMBERS,
             profanityFilter: Environment.NODE_PROFANITY_FILTER,
-            cachebust: CLIENT_CACHEBUST,
+            cachebust: bundleCachebust('standard'),
             per_deployment_token: Environment.WEB_SOCKET_TOKEN_PROTECTION ? getPublicPerDeploymentToken() : ''
         }), {
             headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' }
@@ -68,7 +74,7 @@ export async function handleClientPage(url: URL): Promise<Response | null> {
                 lowmem,
                 members: Environment.NODE_MEMBERS,
                 profanityFilter: Environment.NODE_PROFANITY_FILTER,
-                cachebust: CLIENT_CACHEBUST,
+                cachebust: bundleCachebust('standard'),
                 per_deployment_token: Environment.WEB_SOCKET_TOKEN_PROTECTION ? getPublicPerDeploymentToken() : ''
             }), {
                 headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' }
