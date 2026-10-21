@@ -339,6 +339,8 @@ interface PlayerCombatState {
 
 ```typescript
 interface PlayerState {
+  /** Server world slot from UPDATE_PID; -1 before receipt. Absent on older clients. NPC faceEntity/targetIndex refers to us when equal to 32768 + worldSlot. This is NOT the client's reserved local-player array index (2047). */
+  worldSlot?: number;
   name: string;
   combatLevel: number;
   /** Current hitpoints level (boosted/drained) */
@@ -385,6 +387,8 @@ interface SkillState {
 
 ```typescript
 interface DialogState {
+  /** True while a server numeric Enter Amount prompt is open. */
+  countInputOpen?: boolean;
   isOpen: boolean;
   options: DialogOption[];
   isWaiting: boolean;
@@ -392,6 +396,17 @@ interface DialogState {
   pageId?: string;
   text?: string;
   allComponents?: DialogComponent[];
+}
+```
+
+### QuestState
+
+```typescript
+interface QuestState {
+  available: boolean;
+  points?: number;
+  entries: {id:number;name:string;status:'not_started'|'in_progress'|'completed'|'unknown';progress?:number}[];
+  journal?: {questId?:number;title:string;lines:string[]};
 }
 ```
 
@@ -536,6 +551,9 @@ interface OpFeedbackState {
 
 ```typescript
 interface BotWorldState {
+  /** Current game-provided hint arrow; null means no active arrow. */
+  hint?: {type:'tile';x:number;z:number}|{type:'npc'|'player';index:number}|null;
+  tabs?: {running?:boolean;active:number;flashing:number|null;available:{index:number;name:string}[];tutorialText:string[]};
   tick: number;
   /** Tick on which an updated Lite runner already emitted policy-gated KBD op2. */
   fastKbdAttackTick?: number;
@@ -550,6 +568,7 @@ interface BotWorldState {
   skills: SkillState[];
   inventory: InventoryItem[];
   equipment: InventoryItem[];
+  quests?: QuestState;
   nearbyNpcs: NearbyNpc[];
   nearbyPlayers: NearbyPlayer[];
   nearbyLocs: NearbyLoc[];

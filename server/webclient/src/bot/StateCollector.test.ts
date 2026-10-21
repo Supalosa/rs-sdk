@@ -77,6 +77,17 @@ function createClient() {
 }
 
 describe('BotStateCollector combat state', () => {
+    test('exposes the UPDATE_PID world slot rather than local array index 2047', () => {
+        const client = createClient();
+        client.selfSlot = 0;
+        const collector = new BotStateCollector(client);
+        expect((collector as any).collectPlayerState(12, 100).worldSlot).toBe(0);
+        client.selfSlot = 37;
+        expect((collector as any).collectPlayerState(12, 100).worldSlot).toBe(37);
+        delete client.selfSlot;
+        expect((collector as any).collectPlayerState(12, 100).worldSlot).toBe(-1);
+    });
+
     test('uses the public tick for damage events and faceEntity for targeting', () => {
         const client = createClient();
         const collector = new BotStateCollector(client);

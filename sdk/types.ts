@@ -21,6 +21,11 @@ export interface PlayerCombatState {
 }
 
 export interface PlayerState {
+    /** Server world slot from UPDATE_PID; -1 before receipt. Absent on older clients.
+     * NPC faceEntity/targetIndex refers to us when equal to 32768 + worldSlot.
+     * This is NOT the client's reserved local-player array index (2047).
+     */
+    worldSlot?: number;
     name: string;
     combatLevel: number;
     /** Current hitpoints level (boosted/drained) */
@@ -488,6 +493,7 @@ export interface CombatEvent {
     type: 'damage_taken' | 'damage_dealt' | 'kill';
     damage: number;
     sourceType: 'player' | 'npc' | 'other_player';
+    /** Inferred from facing for damage_taken; not an authoritative attacker identity. */
     sourceIndex: number;
     targetType: 'player' | 'npc' | 'other_player';
     targetIndex: number;

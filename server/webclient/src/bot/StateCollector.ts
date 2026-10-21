@@ -613,6 +613,7 @@ export class BotStateCollector implements ScanProvider {
         }
 
         return {
+            worldSlot: Number.isInteger(c.selfSlot) && c.selfSlot >= 0 ? c.selfSlot : -1,
             name: player.name || 'Unknown',
             combatLevel: player.combatLevel || 0,
             hp,
