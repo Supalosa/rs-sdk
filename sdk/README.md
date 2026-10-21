@@ -210,6 +210,14 @@ await bot.buyFromShop(); // Waits for item in inventory
 await bot.walkTo(x, z); // Uses pathfinding, waits for arrival
 ```
 
+Collision data and the WebAssembly pathfinder load on the first map query
+(including `findPath`, `walkTo`, and tile/door queries), once per process.
+Importing the SDK or connecting through the runner does not load the maps.
+The first query builds them synchronously and can pause the event loop; callers
+that need to pay that cost before connecting can explicitly call
+`initPathfinding()` from `sdk/pathfinding.ts`. Parsed collision source arrays
+can be garbage collected after the maps are built.
+
 ## State Access
 
 ```typescript

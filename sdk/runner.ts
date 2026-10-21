@@ -4,7 +4,6 @@
 import { BotSDK, deriveGatewayUrl } from './index';
 import { BotActions } from './actions';
 import { executionContext, abortable } from './execution-context';
-import { initPathfinding } from './pathfinding';
 import { formatWorldStateSummary } from './formatter';
 import type { BotWorldState } from './types';
 import { readFileSync, existsSync } from 'fs';
@@ -155,14 +154,6 @@ async function getOrCreateConnection(): Promise<BotConnection> {
     }
 
     const gatewayUrl = deriveGatewayUrl(server);
-
-    // Warm the pathfinder BEFORE the live socket exists. Init is fully
-    // synchronous (tens of seconds on slow hosts), and paying it lazily
-    // inside the first walkTo blocks the event loop long enough for the
-    // gateway to kill the connection on missed pings - which presented as
-    // "interactLoc froze the whole process". Idempotent, so repeat
-    // connections skip it.
-    initPathfinding();
 
     console.error(`[Runner] Connecting to bot "${username}"...`);
 

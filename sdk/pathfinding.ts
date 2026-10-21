@@ -1,7 +1,9 @@
 // Local pathfinding using bundled collision data
-import * as rsmod from '../server/vendor/rsmod-pathfinder';
-import { CollisionType, CollisionFlag } from '../server/vendor/rsmod-pathfinder';
-import collisionData from './collision-data.json';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+let rsmod: typeof import('../server/vendor/rsmod-pathfinder');
 
 let initialized = false;
 
@@ -82,11 +84,15 @@ function doorKey(level: number, x: number, z: number): string {
     return `${level},${x},${z}`;
 }
 
+/** Load and build the shared maps on first use. This initial call is synchronous. */
 export function initPathfinding(): void {
     if (initialized) return;
 
-    const data = collisionData as CollisionData;
     const start = Date.now();
+    rsmod = require('../server/vendor/rsmod-pathfinder');
+    // Read only when maps are needed. Avoid the JSON module cache so the large
+    // source arrays can be collected once copied into the WASM collision map.
+    const data = JSON.parse(readFileSync(new URL('./collision-data.json', import.meta.url), 'utf8')) as CollisionData;
 
     // Allocate all zones first (includes walkable areas with no collision tiles)
     for (const [level, zoneX, zoneZ] of data.zones) {
@@ -182,7 +188,7 @@ export function findLongPath(
 
         const waypointsRaw = rsmod.findLongPath(
             level, srcX, srcZ, destX, destZ,
-            1, 1, 1, 0, -1, true, 0, maxWaypoints, CollisionType.NORMAL
+            1, 1, 1, 0, -1, true, 0, maxWaypoints, rsmod.CollisionType.NORMAL
         );
 
         return unpackWaypoints(waypointsRaw);
@@ -204,7 +210,7 @@ export function findLongPath(
 /** Check if a tile is walkable (no blocking flags). */
 export function isTileWalkable(level: number, x: number, z: number): boolean {
     if (!initialized) initPathfinding();
-    return !rsmod.isFlagged(x, z, level, CollisionFlag.WALK_BLOCKED);
+    return !rsmod.isFlagged(x, z, level, rsmod.CollisionFlag.WALK_BLOCKED);
 }
 
 /** Check if a tile has specific collision flags set. */
@@ -219,6 +225,7 @@ export function isFlagged(x: number, z: number, level: number, masks: number): b
  * land always has some collision data (objects, walls, floor flags nearby).
  */
 export function isZoneLikelyLand(level: number, x: number, z: number): boolean {
+    if (!initialized) initPathfinding();
     return populatedZones.has(`${level},${x & ~7},${z & ~7}`);
 }
 
