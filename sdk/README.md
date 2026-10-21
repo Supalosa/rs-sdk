@@ -186,6 +186,41 @@ it. With `LOGIN_SERVER=false` the gateway accepts any password, so keep it on
 `127.0.0.1`. Bots in a browser tab always use the game server's `/gateway`, and
 bots on a private gateway don't appear in the server's public `/status`.
 
+### Optional pathfinding server
+
+By default each SDK process loads its own collision maps on the first map query.
+To share maps, configure an HTTP(S) service implementing the private v1 protocol
+(`POST /v1/query`, operations `findPath`, `inspectTile`, `getDoor`, and
+`planDoorRoute`). The rs-sdk-shared manager supplies this service:
+
+```typescript
+const sdk = new BotSDK({
+  botUsername: "mybot",
+  gatewayUrl: "ws://127.0.0.1:7800",
+  pathfindingServer: "http://127.0.0.1:7790",
+  pathfindingTimeout: 5000, // per HTTP query; walkTo also keeps its whole-route deadline
+});
+```
+
+Alternatively set `PATHFINDING_SERVER=http://127.0.0.1:7790` in the script
+process environment or its `bot.env` when using `runScript`. An explicit
+`pathfindingServer` wins over the environment; `pathfindingServer: ""` forces
+local maps. The setting affects the SDK, not the lite client's game connection.
+
+`bot.walkTo` uses the configured backend for routes, door approaches, temporary
+door blocks, and walkability diagnostics. Service errors reject the operation;
+there is no fallback to local maps. Temporary door blocks and their expiration
+remain specific to each SDK instance, with active blocks sent on each query.
+The same partial-path and unreachable-destination handling applies to both modes.
+
+Use `await sdk.sendFindPath(...)` in portable scripts. The synchronous
+`sdk.findPath(...)` remains available in local mode and throws with guidance in
+remote mode. Likewise use `await sdk.sendBlockDoorTemporarily(...)` instead of
+synchronous `blockDoorTemporarily` in remote mode. `sendPlanDoorRoute` and
+`sendIsTileWalkable` provide the other asynchronous map operations. Direct imports
+from `sdk/pathfinding.ts` always use local maps and bypass the configured service.
+The service uses its own bundled map snapshot, which should match the SDK version.
+
 ## Two-Layer API
 
 ### Plumbing (BotSDK)

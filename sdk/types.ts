@@ -689,6 +689,10 @@ export interface SDKConfig {
     password?: string;
     /** Full WebSocket URL (e.g. wss://server.com/gateway). Overrides host/port if set. */
     gatewayUrl?: string;
+    /** Optional HTTP(S) pathfinding service origin. Defaults to PATHFINDING_SERVER, otherwise local maps. Empty string forces local maps. */
+    pathfindingServer?: string;
+    /** Deadline per remote map query in milliseconds (default: 5000). */
+    pathfindingTimeout?: number;
     /** Gateway hostname (default: localhost) */
     host?: string;
     /** Gateway port (default: 7780) */

@@ -7,7 +7,7 @@ import { throwIfExecutionAborted, withExecutionDeadline } from './execution-cont
 import { GEActions } from './ge-actions';
 import type { GEOfferRequest, GEActionResult } from './ge-types';
 import { ActionHelpers, ALREADY_FIGHTING_REFUSALS, NO_RUNES_REFUSALS } from './actions-helpers';
-import { findDoorsAlongPath, planDoorRoute, isTileWalkable } from './pathfinding';
+import type { DoorInfo } from './pathfinding';
 import type {
     ActionResult,
     BotWorldState,
@@ -1139,7 +1139,7 @@ export class BotActions {
         // Recovery must use evidence from the current route, never a nearby
         // unrelated door: some doors teleport the player through and close
         // again, so opening the nearest one can pull us back into a room.
-        let pendingRouteDoors: ReturnType<typeof findDoorsAlongPath> = [];
+        let pendingRouteDoors: DoorInfo[] = [];
         const refreshPosition = () => {
             const player = this.sdk.getState()?.player;
             if (player) pos = { x: player.worldX, z: player.worldZ };
@@ -1164,7 +1164,7 @@ export class BotActions {
             const fails = (doorFailCounts.get(key) ?? 0) + 1;
             doorFailCounts.set(key, fails);
             if (result === 'locked' || fails >= 3) {
-                this.sdk.blockDoorTemporarily(level, nearest.x, nearest.z);
+                await this.sdk.sendBlockDoorTemporarily(level, nearest.x, nearest.z);
             }
             return false;
         };
@@ -1190,7 +1190,7 @@ export class BotActions {
                     // tile instead of chasing a phantom pathfinder bug.
                     const level = this.sdk.getState()?.player?.level ?? 0;
                     const reason = path.error
-                        ?? (isTileWalkable(level, x, z) ? 'no waypoints' : 'destination tile is blocked');
+                        ?? (await this.sdk.sendIsTileWalkable(level, x, z) ? 'no waypoints' : 'destination tile is blocked');
                     console.error(`[walkTo] PATHFINDING FAILED: ${reason} - from (${pos.x}, ${pos.z}) to (${x}, ${z})`);
                     return { success: false, message: `No path to (${x}, ${z}) from (${pos.x}, ${pos.z}): ${reason}` };
                 }
@@ -1220,7 +1220,7 @@ export class BotActions {
             lastPartialEnd = partial ? { x: endWp.x, z: endWp.z } : null;
 
             // Identify doors the path crosses through so we can open them proactively
-            const route = planDoorRoute(path.waypoints, pos);
+            const route = await this.sdk.sendPlanDoorRoute(path.waypoints, pos);
             path.waypoints = route.waypoints;
             const requiredDoors = route.doors;
             pendingRouteDoors = requiredDoors;
@@ -1264,7 +1264,7 @@ export class BotActions {
                                     } else if (result === 'locked') {
                                         // Definitely locked right now — avoid it for
                                         // this session's next path queries.
-                                        this.sdk.blockDoorTemporarily(door.level, door.x, door.z);
+                                        await this.sdk.sendBlockDoorTemporarily(door.level, door.x, door.z);
                                         requiredDoorKeys.delete(dk);
                                         console.log(`[walkTo] Temporarily avoiding locked door at (${door.x}, ${door.z}) — re-routing`);
                                         refreshPosition();
@@ -1282,7 +1282,7 @@ export class BotActions {
                                         const fails = (doorFailCounts.get(dk) ?? 0) + 1;
                                         doorFailCounts.set(dk, fails);
                                         if (fails >= 3) {
-                                            this.sdk.blockDoorTemporarily(door.level, door.x, door.z);
+                                            await this.sdk.sendBlockDoorTemporarily(door.level, door.x, door.z);
                                             requiredDoorKeys.delete(dk);
                                             console.log(`[walkTo] Temporarily avoiding impassable door at (${door.x}, ${door.z}) after ${fails} failures — re-routing`);
                                         } else {

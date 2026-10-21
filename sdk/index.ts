@@ -35,6 +35,7 @@ import { ChatHistory } from './chat-history';
 import { executionContext, executionWait, throwIfExecutionAborted } from './execution-context';
 import { redactCredentials } from './redact';
 import * as pathfinding from './pathfinding';
+import { PathfindingClient, type PathResult, type PathWaypoint, type DoorRoute } from './pathfinding-client';
 import { resolveInterfaceOption, shortestNameMatch, type InterfaceOptionSelector } from './action-quantity';
 
 /**
@@ -191,6 +192,7 @@ export class BotSDK {
     private connectPromise: Promise<void> | null = null;
     private sdkClientId: string;
     private temporaryDoorBlocks = new pathfinding.TemporaryDoorBlocklist();
+    private pathfindingClient?: PathfindingClient;
 
     /** True once the gateway has accepted our credentials (sdk_connected received). */
     private authenticated = false;
@@ -206,6 +208,8 @@ export class BotSDK {
             botUsername: config.botUsername,
             password: config.password || '',
             gatewayUrl: config.gatewayUrl || '',
+            pathfindingServer: config.pathfindingServer ?? (typeof process !== 'undefined' ? process.env.PATHFINDING_SERVER : undefined) ?? '',
+            pathfindingTimeout: config.pathfindingTimeout ?? 5000,
             host: config.host || 'localhost',
             port: config.port || 7780,
             connectionMode: config.connectionMode || 'control',
@@ -222,6 +226,9 @@ export class BotSDK {
             reconnectMaxDelay: config.reconnectMaxDelay ?? 30000,
             showChat: config.showChat ?? true
         };
+        if (this.config.pathfindingServer) {
+            this.pathfindingClient = new PathfindingClient(this.config.pathfindingServer, this.config.pathfindingTimeout);
+        }
         this.sdkClientId = `sdk-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     }
 
@@ -1728,14 +1735,15 @@ export class BotSDK {
         });
     }
 
-    // ============ Local Pathfinding ============
+    // ============ Pathfinding ============
 
-    /** Find path to destination using local collision data. */
+    /** Synchronous local pathfinding. With pathfindingServer configured, use sendFindPath instead. */
     findPath(
         destX: number,
         destZ: number,
         maxWaypoints: number = 500
     ): { success: boolean; waypoints: Array<{ x: number; z: number; level: number }>; reachedDestination?: boolean; error?: string } {
+        if (this.pathfindingClient) throw new Error('Remote pathfinding is asynchronous; use await sdk.sendFindPath()');
         const state = this.getState();
         if (!state?.player) {
             return { success: false, waypoints: [], error: 'No player state available' };
@@ -1763,6 +1771,10 @@ export class BotSDK {
             this.temporaryDoorBlocks.active()
         );
 
+        return this.finishPath(destX, destZ, waypoints, destZoneAllocated);
+    }
+
+    private finishPath(destX: number, destZ: number, waypoints: PathWaypoint[], destZoneAllocated: boolean): PathResult {
         // If no waypoints and destination zone isn't allocated, that's expected -
         // we just can't path there yet (might need to open a door first)
         if (waypoints.length === 0 && !destZoneAllocated) {
@@ -1794,6 +1806,7 @@ export class BotSDK {
      * The shared collision map is never mutated beyond the synchronous query.
      */
     blockDoorTemporarily(level: number, x: number, z: number, ttlMs: number = 30_000): boolean {
+        if (this.pathfindingClient) throw new Error('Remote pathfinding is asynchronous; use await sdk.sendBlockDoorTemporarily()');
         const door = pathfinding.getDoorAt(level, x, z);
         if (!door) return false;
         this.temporaryDoorBlocks.block(door, ttlMs);
@@ -1805,13 +1818,48 @@ export class BotSDK {
         return this.temporaryDoorBlocks.has(level, x, z);
     }
 
-    /** Find path to destination (async alias for findPath). */
+    /** Find a path using the configured remote service or local maps. */
     async sendFindPath(
         destX: number,
         destZ: number,
         maxWaypoints: number = 500
     ): Promise<{ success: boolean; waypoints: Array<{ x: number; z: number; level: number }>; reachedDestination?: boolean; error?: string }> {
-        return this.findPath(destX, destZ, maxWaypoints);
+        throwIfExecutionAborted();
+        if (!this.pathfindingClient) return this.findPath(destX, destZ, maxWaypoints);
+        const player = this.getState()?.player;
+        if (!player) return { success: false, waypoints: [], error: 'No player state available' };
+        const result = await this.pathfindingClient.findPath(
+            { x: player.worldX, z: player.worldZ, level: player.level },
+            { x: destX, z: destZ }, maxWaypoints, this.temporaryDoorBlocks.active(),
+        );
+        if (!result.success) return { success: false, waypoints: [], error: result.error };
+        return this.finishPath(destX, destZ, result.waypoints, result.destinationZoneAllocated!);
+    }
+
+    /** Query tile walkability without loading local maps when using a service. */
+    async sendIsTileWalkable(level: number, x: number, z: number): Promise<boolean> {
+        throwIfExecutionAborted();
+        return this.pathfindingClient
+            ? this.pathfindingClient.isTileWalkable(level, x, z)
+            : pathfinding.isTileWalkable(level, x, z);
+    }
+
+    /** Add door approach waypoints using the configured map backend. */
+    async sendPlanDoorRoute(waypoints: PathWaypoint[], start?: { x: number; z: number }): Promise<DoorRoute> {
+        throwIfExecutionAborted();
+        return this.pathfindingClient
+            ? this.pathfindingClient.planDoorRoute(waypoints, start)
+            : pathfinding.planDoorRoute(waypoints, start);
+    }
+
+    /** Temporarily exclude a door for this SDK session only; no local map fallback. */
+    async sendBlockDoorTemporarily(level: number, x: number, z: number, ttlMs: number = 30_000): Promise<boolean> {
+        throwIfExecutionAborted();
+        if (!this.pathfindingClient) return this.blockDoorTemporarily(level, x, z, ttlMs);
+        const door = await this.pathfindingClient.getDoor(level, x, z);
+        if (!door) return false;
+        this.temporaryDoorBlocks.block(door, ttlMs);
+        return true;
     }
 
     // ============ Plumbing: State Waiting ============

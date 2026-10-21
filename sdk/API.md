@@ -303,13 +303,16 @@
 | `async sendBankDeposit(slot: number, amount: number = 1): Promise<ActionResult>` | Deposit item to bank by slot. |
 | `async sendBankWithdraw(slot: number, amount: number = 1): Promise<ActionResult>` | Withdraw item from bank by slot. |
 | `async sendScreenshot(timeout: number = 10000): Promise<string>` | Request a screenshot from the bot client. Returns the screenshot as a data URL (data:image/png;base64,...). |
-| `async sendFindPath(destX: number, destZ: number, maxWaypoints: number = 500): Promise<{ success: boolean; waypoints: Array<{ x: number; z: number; level: number }>; reachedDestination?: boolean; error?: string }>` | Find path to destination (async alias for findPath). |
+| `async sendFindPath(destX: number, destZ: number, maxWaypoints: number = 500): Promise<{ success: boolean; waypoints: Array<{ x: number; z: number; level: number }>; reachedDestination?: boolean; error?: string }>` | Find a path using the configured remote service or local maps. |
+| `async sendIsTileWalkable(level: number, x: number, z: number): Promise<boolean>` | Query tile walkability without loading local maps when using a service. |
+| `async sendPlanDoorRoute(waypoints: PathWaypoint[], start?: { x: number; z: number }): Promise<DoorRoute>` | Add door approach waypoints using the configured map backend. |
+| `async sendBlockDoorTemporarily(level: number, x: number, z: number, ttlMs: number = 30_000): Promise<boolean>` | Temporarily exclude a door for this SDK session only; no local map fallback. |
 
 ### Pathfinding
 
 | Signature | Description |
 |---|---|
-| `findPath(destX: number, destZ: number, maxWaypoints: number = 500): { success: boolean; waypoints: Array<{ x: number; z: number; level: number }>; reachedDestination?: boolean; error?: string }` | Find path to destination using local collision data. |
+| `findPath(destX: number, destZ: number, maxWaypoints: number = 500): { success: boolean; waypoints: Array<{ x: number; z: number; level: number }>; reachedDestination?: boolean; error?: string }` | Synchronous local pathfinding. With pathfindingServer configured, use sendFindPath instead. |
 
 ---
 
