@@ -256,7 +256,15 @@ export class LiteClient {
      * browser shell there is no redraw to interleave with, so we just loop until
      * the socket is dry.
      */
-    async pumpPackets(): Promise<void> {
+    private packetPump: Promise<void> = Promise.resolve();
+
+    pumpPackets(): Promise<void> {
+        const task = this.packetPump.then(() => this.drainPackets());
+        this.packetPump = task.catch(() => {});
+        return task;
+    }
+
+    private async drainPackets(): Promise<void> {
         let guard = 0;
         while (!this.loggedOut && (await handlePacket(this))) {
             if (++guard > 5000) {

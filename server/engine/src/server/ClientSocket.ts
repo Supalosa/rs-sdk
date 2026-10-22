@@ -6,6 +6,8 @@ import Packet from '#/io/Packet.js';
 
 
 export default abstract class ClientSocket {
+    /** Optional out-of-band transport control, installed by isolated test worlds only. */
+    static controlFrame?: (client: ClientSocket, message: string) => boolean;
     uuid = randomUUID();
     remoteAddress = 'unknown';
     totalBytesRead = 0;

@@ -32,6 +32,8 @@ import type {
 import type { TradeState } from './types';
 import { PRAYER_INDICES, PRAYER_NAMES, PLAYER_CHAT_TYPES, isPlayerChat, TRADE_REQUEST_CHAT_TYPE } from './types';
 import { ChatHistory } from './chat-history';
+import { LockstepClock } from './clock';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { executionContext, executionWait, throwIfExecutionAborted } from './execution-context';
 import { redactCredentials } from './redact';
 import * as pathfinding from './pathfinding';
@@ -168,6 +170,70 @@ import { chunkMessage } from './chunking';
 export { Spells, type SpellName } from './spells';
 
 export class BotSDK {
+    private clock?: LockstepClock;
+    private readonly tickBatches = new AsyncLocalStorage<{ active: boolean }>();
+
+    /**
+     * Dispatch several actions before the next automatic lockstep tick.
+     * Automatic action yields are skipped inside this async closure; the
+     * outermost closure yields once on exit, including when it throws, since
+     * actions already dispatched cannot be rolled back. Nested calls share
+     * the outer batch. Await all work started by the callback.
+     *
+     * Reading an existing observation (including dialogue) is fine here.
+     * Helpers are allowed, but helpers that wait for a new server response,
+     * explicit yield(), and tick/condition waits can advance additional ticks.
+     * Use dispatch-only actions when every input must precede the same tick.
+     * On a live server this simply runs the callback: its independent clock
+     * means that delivery within one server tick cannot be guaranteed.
+     */
+    async inOneTick<T>(callback: () => T | Promise<T>): Promise<T> {
+        if (this.tickBatches.getStore()?.active) return callback();
+        const scope = { active: true };
+        return this.tickBatches.run(scope, async () => {
+            let failed = false;
+            let failure: unknown;
+            try {
+                return await callback();
+            } catch (error) {
+                failed = true;
+                failure = error;
+                throw error;
+            } finally {
+                scope.active = false;
+                if (this.clock) {
+                    try {
+                        await this.clock.yield();
+                    } catch (error) {
+                        if (failed) throw new AggregateError([failure, error], 'inOneTick callback and final yield failed');
+                        throw error;
+                    }
+                }
+            }
+        });
+    }
+
+    /** Enable only after connecting to a paused test world with a lockstep client. */
+    setClockMode(mode: 'realtime' | 'lockstep'): void {
+        this.clock = mode === 'lockstep' ? new LockstepClock(async () => {
+            const result = await this.dispatchAction({ type: 'testClockYield', reason: 'Test clock' });
+            const state = result.data as BotWorldState | undefined;
+            if (!result.success || !state || !Number.isSafeInteger(state.tick)) {
+                throw new Error(result.message ?? 'Lockstep yield failed');
+            }
+            // The acknowledged result contains the fully drained observation;
+            // ordinary gateway state fanout can coalesce intermediate updates.
+            this.handleMessage(JSON.stringify({ type: 'sdk_state', state }));
+            return this.getState()!;
+        }) : undefined;
+    }
+
+    get clockMode(): 'realtime' | 'lockstep' { return this.clock ? 'lockstep' : 'realtime'; }
+
+    /** Let one game tick pass, either observed live or requested in lockstep. */
+    async yield(): Promise<BotWorldState> {
+        return this.clock ? this.clock.yield() : this.waitForTicks(1);
+    }
     readonly config: Required<SDKConfig>;
     private ws: WebSocket | null = null;
     private state: BotWorldState | null = null;
@@ -1078,6 +1144,13 @@ export class BotSDK {
     // ============ Plumbing: Raw Actions ============
 
     private async sendAction(action: BotAction): Promise<ActionResult> {
+        const result = await this.dispatchAction(action);
+        const readOnly = ['none', 'scanNearbyLocs', 'scanGroundItems', 'getComponentOptions', 'getInventory', 'screenshot'];
+        if (this.clock && result.success && !readOnly.includes(action.type) && !this.tickBatches.getStore()?.active) await this.clock.yield();
+        return result;
+    }
+
+    private async dispatchAction(action: BotAction): Promise<ActionResult> {
         if (this.connectionState === 'reconnecting') {
             console.log(`[BotSDK] Waiting for reconnection before sending action: ${action.type}`);
             await this.waitForConnection();
@@ -1926,6 +1999,7 @@ export class BotSDK {
         timeout: number,
         timeoutMessage: string,
     ): Promise<BotWorldState> {
+        if (this.clock) return this.clock.wait(predicate, timeout, timeoutMessage);
         return executionWait<BotWorldState>((resolve, reject) => {
             const timeoutId = setTimeout(() => reject(new Error(timeoutMessage)), timeout);
             const unsubscribe = this.onStateUpdate(state => {

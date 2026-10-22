@@ -2,7 +2,7 @@
 // Private helper methods extracted from BotActions for reusability
 
 import { BotSDK } from './index';
-import { executionWait } from './execution-context';
+import { throwIfExecutionAborted } from './execution-context';
 import { shortestNameMatch } from './action-quantity';
 import type {
     NearbyLoc,
@@ -320,57 +320,38 @@ export class ActionHelpers {
         let lastZ = startZ;
         let lastMoveTick = startTick;
 
-        return executionWait((resolve) => {
-            let resolved = false;
-            const done = (result: { arrived: boolean; stoppedMoving: boolean; x: number; z: number }) => {
-                if (resolved) return;
-                resolved = true;
-                resolve(result);
-            };
-
-            // Hard ms failsafe in case state updates stop arriving
-            const safetyTimer = setTimeout(() => {
-                const s = this.sdk.getState()?.player;
-                const fx = s?.worldX ?? lastX;
-                const fz = s?.worldZ ?? lastZ;
-                const fd = this.distance(fx, fz, targetX, targetZ);
-                done({ arrived: fd <= tolerance, stoppedMoving: true, x: fx, z: fz });
+        let outcome: { arrived: boolean; stoppedMoving: boolean; x: number; z: number } | undefined;
+        try {
+            await this.sdk.waitForCondition((state) => {
+                if (!state.player) return false;
+                const x = state.player.worldX;
+                const z = state.player.worldZ;
+                if (this.distance(x, z, targetX, targetZ) <= tolerance) {
+                    outcome = { arrived: true, stoppedMoving: false, x, z };
+                    return true;
+                }
+                if (x !== lastX || z !== lastZ) {
+                    lastMoveTick = state.tick;
+                    lastX = x;
+                    lastZ = z;
+                }
+                if (state.tick - lastMoveTick >= STUCK_TICKS || state.tick - startTick >= maxTicks) {
+                    outcome = { arrived: false, stoppedMoving: true, x, z };
+                    return true;
+                }
+                return false;
             }, SAFETY_MS);
-
-            const unsub = this.sdk.onStateUpdate((state) => {
-                if (!state?.player) return;
-
-                const currentX = state.player.worldX;
-                const currentZ = state.player.worldZ;
-                const currentTick = state.tick;
-
-                // Check arrival
-                const distToTarget = this.distance(currentX, currentZ, targetX, targetZ);
-                if (distToTarget <= tolerance) {
-                    done({ arrived: true, stoppedMoving: false, x: currentX, z: currentZ });
-                    return;
-                }
-
-                // Track movement by tick
-                if (currentX !== lastX || currentZ !== lastZ) {
-                    lastMoveTick = currentTick;
-                    lastX = currentX;
-                    lastZ = currentZ;
-                }
-
-                // Stuck: no movement for STUCK_TICKS
-                if (currentTick - lastMoveTick >= STUCK_TICKS) {
-                    done({ arrived: false, stoppedMoving: true, x: currentX, z: currentZ });
-                    return;
-                }
-
-                // Tick budget exceeded
-                if (currentTick - startTick >= maxTicks) {
-                    done({ arrived: distToTarget <= tolerance, stoppedMoving: true, x: currentX, z: currentZ });
-                }
-            });
-            return () => { clearTimeout(safetyTimer); unsub(); };
-        });
+        } catch (error) {
+            // Preserve cancellation; only the ordinary safety timeout reports
+            // the final position as a stopped movement.
+            throwIfExecutionAborted();
+            if (this.sdk.clockMode === 'lockstep') throw error;
+        }
+        if (outcome) return outcome;
+        const final = this.sdk.getState()?.player;
+        const x = final?.worldX ?? lastX;
+        const z = final?.worldZ ?? lastZ;
+        return { arrived: this.distance(x, z, targetX, targetZ) <= tolerance, stoppedMoving: true, x, z };
     }
 
     // ============ Walk Step Helper ============

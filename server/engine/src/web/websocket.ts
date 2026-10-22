@@ -5,6 +5,7 @@ import OnDemand from '#/engine/OnDemand.js';
 import { LoggerEventType } from '#/server/logger/LoggerEventType.js';
 import NullClientSocket from '#/server/NullClientSocket.js';
 import WSClientSocket from '#/server/ws/WSClientSocket.js';
+import ClientSocket from '#/server/ClientSocket.js';
 import Environment from '#/util/Environment.js';
 import { gatewayLabelQuery, getIp } from './utils.js';
 import { checkWorldFeedUpgrade, isWorldFeedPath, onWorldFeedClose, onWorldFeedMessage, onWorldFeedOpen } from './worldfeed.js';
@@ -182,6 +183,7 @@ export const websocketHandlers = {
                 return;
             }
 
+            if (typeof message === 'string' && ClientSocket.controlFrame?.(client, message)) return;
             client.buffer(message);
 
             if (client.state === 0) {

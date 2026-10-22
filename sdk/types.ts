@@ -617,6 +617,7 @@ export interface BotWorldState {
 // ============ Action Types ============
 
 export type BotAction =
+    | { type: 'testClockYield'; reason: string }
     | { type: 'none'; reason: string }
     | { type: 'wait'; reason: string; ticks?: number }
     | { type: 'talkToNpc'; npcIndex: number; reason: string }

@@ -486,6 +486,7 @@ export interface PacketLogEntry {
 // SDK action types - pure primitives that map to game protocol
 // Domain logic lives in BotActions (sdk/actions.ts), not here
 export type BotAction =
+    | { type: 'testClockYield'; reason: string }
     | { type: 'none'; reason: string }
     | { type: 'wait'; reason: string; ticks?: number }
     | { type: 'talkToNpc'; npcIndex: number; reason: string }

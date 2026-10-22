@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { OutdatedClientError } from './net/GameConnection.js';
 import { startSession, type LiteSession } from './session.js';
 import { type ActionResult } from '#/bot/ActionExecutor.js';
+import { installClientTestClock } from './test-clock.js';
 import { BotActionQueue, type QueuedBotAction } from '#/bot/ActionQueue.js';
 import type { BotAction, BotWorldState } from '#/bot/types.js';
 import type { LiteClient } from './LiteClient.js';
@@ -31,6 +32,7 @@ const RECONNECT_MS = 3000;
 
 class LiteGatewayRunner {
     private client: LiteClient;
+    private testClock: ReturnType<typeof installClientTestClock>;
     private actionQueue = new BotActionQueue();
     private waitTicks = 0;
     private serverTick = 0;
@@ -57,6 +59,7 @@ class LiteGatewayRunner {
         private fastKbdAttackEnabled = false,
     ) {
         this.client = session.client;
+        this.testClock = installClientTestClock(this.client, () => this.client.collectBotState(this.serverTick));
         // State collection and action execution go through the client, which
         // activates this bot's interface table first - see LiteClient.activate.
         this.client.setOnGameTickCallback(() => {
@@ -224,7 +227,9 @@ class LiteGatewayRunner {
         if (!queued) return;
 
         const action = queued.action;
-        const resultOrPromise = this.client.executeBotAction(action);
+        const resultOrPromise = action.type === 'testClockYield'
+            ? (this.testClock ? this.testClock() : { success: false, message: 'Test clock unavailable' })
+            : this.client.executeBotAction(action);
 
         if (resultOrPromise instanceof Promise) {
             resultOrPromise
