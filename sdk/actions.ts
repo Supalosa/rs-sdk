@@ -4081,27 +4081,51 @@ export class BotActions {
             return state.inventory.find(item => matchesOre(item) && (amounts.get(item.id) ?? 0) > (before.get(item.id) ?? 0));
         };
         const miningXp = (state: BotWorldState) => state.skills.find(skill => /^mining$/i.test(skill.name))?.experience ?? xp;
-        const baseline = this.helpers.getMessageTick();
-        const rejection = this.helpers.opRejectionCursor();
+        const deadline = Date.now() + timeout;
         const refusals = ['need a mining level', 'need a pickaxe', 'do not have a pickaxe', "can't reach", 'cannot reach', 'no ore'];
-        const interaction = await this.sdk.sendInteractLoc(current.x, current.z, current.id, mine.opIndex);
-        if (!interaction.success) return fail(interaction.reason === 'cant_reach' ? 'cant_reach' : 'rejected', interaction.message);
-        try {
-            const final = await this.sdk.waitForCondition(state =>
-                (Boolean(gainedOre(state)) && miningXp(state) > xp) ||
-                this.helpers.wasOpRejectedSince(rejection, state) ||
-                Boolean(this.helpers.findRefusal(baseline, refusals)), timeout);
-            const ore = gainedOre(final);
-            const xpGained = miningXp(final) - xp;
-            if (ore && xpGained > 0) {
-                const count = final.inventory.filter(item => item.id === ore.id).reduce((sum, item) => sum + item.count, 0);
-                return { success: true, message: `Mined ${ore.name}`, ore, oresMined: count - (before.get(ore.id) ?? 0), xpGained };
-            }
-            return fail('rejected', this.helpers.findRefusal(baseline, refusals) ?? 'Mining operation was rejected');
-        } catch {
+        // UNSET_MAP_FLAG is only a rejection hint: live mining can emit it
+        // before its first swing. Allow four fresh ticks for activity, and never
+        // re-click after a swing/animation or XP gain (it can reset mining).
+        for (let attempt = 0; attempt < 3; attempt++) {
             throwIfExecutionAborted();
-            return fail('timeout', `No ${oreName ?? 'ore'} gained from ${rock.name} within ${timeout}ms`);
+            const baseline = this.helpers.getMessageTick();
+            const rejection = this.helpers.opRejectionCursor();
+            let rejectedAt: number | undefined;
+            let started = false;
+            const target = this.helpers.refindLocation(rock);
+            const option = target?.optionsWithIndex.find(option => /^mine$/i.test(option.text));
+            if (!target || !option) return fail('loc_not_found', 'Mining rock is no longer available');
+            const interaction = await this.sdk.sendInteractLoc(target.x, target.z, target.id, option.opIndex);
+            if (!interaction.success) return fail(interaction.reason === 'cant_reach' ? 'cant_reach' : 'rejected', interaction.message);
+            try {
+                const final = await this.sdk.waitForCondition(state => {
+                    if (gainedOre(state) && miningXp(state) > xp) return true;
+                    if (this.helpers.findRefusal(baseline, refusals)) return true;
+                    started ||= miningXp(state) > xp ||
+                        (state.player?.animId !== undefined && state.player.animId !== -1) ||
+                        state.gameMessages.some(message => this.helpers.isMessageAfter(message, baseline) &&
+                            /you swing your pick/i.test(message.text));
+                    if (!started && this.helpers.wasOpRejectedSince(rejection, state)) {
+                        rejectedAt ??= state.tick;
+                        return state.tick - rejectedAt >= 4;
+                    }
+                    return false;
+                }, Math.max(1, deadline - Date.now()));
+                const ore = gainedOre(final);
+                const xpGained = miningXp(final) - xp;
+                if (ore && xpGained > 0) {
+                    const count = final.inventory.filter(item => item.id === ore.id).reduce((sum, item) => sum + item.count, 0);
+                    return { success: true, message: `Mined ${ore.name}`, ore, oresMined: count - (before.get(ore.id) ?? 0), xpGained };
+                }
+                const refusal = this.helpers.findRefusal(baseline, refusals);
+                if (refusal) return fail('rejected', refusal);
+                // Only the debounced, idle rejection hint reaches this retry.
+            } catch {
+                throwIfExecutionAborted();
+                return fail('timeout', `No ${oreName ?? 'ore'} gained from ${rock.name} within ${timeout}ms`);
+            }
         }
+        return fail('rejected', 'Mining operation was rejected after 3 attempts');
     }
 
     /**

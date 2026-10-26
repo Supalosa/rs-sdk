@@ -65,3 +65,66 @@ describe('mineRock completion evidence', () => {
         expect(await h.bot.mineRock(/copper ore/i)).toMatchObject({ success: true, oresMined: 1, xpGained: 437 });
     });
 });
+
+
+describe('mineRock rejection recovery', () => {
+    function frames(h: ReturnType<typeof harness>, batches: ((state: any) => void)[][]) {
+        let waits = 0;
+        h.sdk.waitForCondition = async (predicate: any) => {
+            for (const frame of batches[waits++] ?? []) {
+                frame(h.internal.state);
+                if (predicate(h.internal.state)) return h.internal.state;
+            }
+            throw new Error('No completion in supplied frames');
+        };
+    }
+    const idle = (tick: number, rejected = 1) => (s: any) => {
+        s.tick = tick;
+        s.player.animId = -1;
+        s.opFeedback = { opRejectedCount: rejected };
+    };
+    const completed = (s: any) => {
+        s.skills[0].experience = 437;
+        s.inventory = [{ id: 436, name: 'Copper ore', count: 1, slot: 0 }];
+    };
+
+    test('waits through false rejection and delayed mining completion without re-clicking', async () => {
+        const h = harness();
+        h.internal.state.opFeedback = { opRejectedCount: 0 };
+        let clicks = 0;
+        h.sdk.sendInteractLoc = async () => { clicks++; return { success: true, message: 'dispatched' }; };
+        frames(h, [[idle(2), idle(3), s => { s.tick = 4; s.player.animId = 625; },
+            idle(8, 4), s => { s.tick = 12; completed(s); }]]);
+        expect(await h.bot.mineRock(/copper ore/i)).toMatchObject({ success: true, oresMined: 1 });
+        expect(clicks).toBe(1);
+    });
+
+    test('retries an idle rejection with a fresh cursor, then observes completion', async () => {
+        const h = harness();
+        h.internal.state.opFeedback = { opRejectedCount: 0 };
+        let clicks = 0;
+        h.sdk.sendInteractLoc = async () => { clicks++; return { success: true, message: 'dispatched' }; };
+        frames(h, [[idle(2), idle(6)], [idle(7), completed]]);
+        expect(await h.bot.mineRock(/copper ore/i)).toMatchObject({ success: true, oresMined: 1 });
+        expect(clicks).toBe(2);
+    });
+
+    test('bounds repeated idle rejections to three clicks', async () => {
+        const h = harness();
+        h.internal.state.opFeedback = { opRejectedCount: 0 };
+        let clicks = 0;
+        h.sdk.sendInteractLoc = async () => { clicks++; return { success: true, message: 'dispatched' }; };
+        frames(h, [[idle(2), idle(6)], [idle(7, 2), idle(11, 2)], [idle(12, 3), idle(16, 3)]]);
+        expect(await h.bot.mineRock(/copper ore/i)).toMatchObject({ success: false, reason: 'rejected' });
+        expect(clicks).toBe(3);
+    });
+
+    test('does not retry explicit mining refusals', async () => {
+        const h = harness();
+        let clicks = 0;
+        h.sdk.sendInteractLoc = async () => { clicks++; return { success: true, message: 'dispatched' }; };
+        frames(h, [[s => { s.gameMessages = [{ tick: 2, type: 0, text: 'You need a pickaxe.' }]; }]]);
+        expect(await h.bot.mineRock(/copper ore/i)).toMatchObject({ success: false, reason: 'rejected' });
+        expect(clicks).toBe(1);
+    });
+});
