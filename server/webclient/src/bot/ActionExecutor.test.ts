@@ -43,3 +43,15 @@ describe('ActionExecutor interaction routing', () => {
         expect(result).toMatchObject({ success: true, phase: 'dispatch' });
     });
 });
+
+
+test('forwards NPC routing opt-out to the client primitive', () => {
+    let args: unknown[] = [];
+    const client = {
+        interactNpc: (...values: unknown[]) => { args = values; return { success: true as const, routed: false }; },
+        projectNpcToScreen: () => null
+    };
+    const result = new ActionExecutor(client as any).execute({ type: 'interactNpc', npcIndex: 42, optionIndex: 2, route: false, reason: 'test' });
+    expect(result.success).toBe(true);
+    expect(args).toEqual([42, 2, false]);
+});

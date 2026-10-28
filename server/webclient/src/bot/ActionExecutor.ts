@@ -79,9 +79,10 @@ export class ActionExecutor {
 
                 case 'interactNpc': {
                     const result = this.wrapClientAction(
-                        this.client.interactNpc(action.npcIndex, action.optionIndex),
+                        this.client.interactNpc(action.npcIndex, action.optionIndex, action.route),
                         `Interacting with NPC #${action.npcIndex}`,
-                        'Failed to interact with NPC'
+                        'Failed to interact with NPC',
+                        action.route === false
                     );
                     if (result.success) this.showNpcClickVisual(action.npcIndex);
                     return result;
@@ -428,13 +429,13 @@ export class ActionExecutor {
             : { success: false, message: failMsg, phase: 'validation', reason: 'client_rejected' };
     }
 
-    private wrapClientAction(result: ClientActionResult, successMsg: string, failMsg: string): ActionResult {
+    private wrapClientAction(result: ClientActionResult, successMsg: string, failMsg: string, intentionalNoRoute = false): ActionResult {
         if (result.success) {
             // routed:false = the op dispatched without a client route (ap-range
             // attempt); the server owns the reach check from here. Surface it
             // so callers can still blacklist genuinely unreachable targets.
             if (result.routed === false) {
-                this.warnUnreachable(successMsg);
+                if (!intentionalNoRoute) this.warnUnreachable(successMsg);
                 return { success: true, message: `${successMsg} (unrouted - ap-range attempt)`, phase: 'dispatch', data: { routed: false } };
             }
             return { success: true, message: successMsg, phase: 'dispatch' };

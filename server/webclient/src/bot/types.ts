@@ -490,7 +490,7 @@ export type BotAction =
     | { type: 'none'; reason: string }
     | { type: 'wait'; reason: string; ticks?: number }
     | { type: 'talkToNpc'; npcIndex: number; reason: string }
-    | { type: 'interactNpc'; npcIndex: number; optionIndex: number; reason: string }
+    | { type: 'interactNpc'; npcIndex: number; optionIndex: number; route?: boolean; reason: string }
     | { type: 'interactPlayer'; playerIndex: number; optionIndex: number; reason: string }
     | { type: 'clickDialogOption'; optionIndex: number; reason: string; guard?: { pageId: string; componentId: number } }
     // clickComponent: IF_BUTTON packet - for simple buttons, spellcasting, etc.
