@@ -1121,7 +1121,7 @@ export class Client extends GameShell {
      * Option 1 is usually "Talk-to", Option 2 might be "Pickpocket", etc.
      * Use getNearbyNpcs() to see available options for each NPC
      */
-    interactNpc(npcIndex: number, optionIndex: number): ClientActionResult {
+    interactNpc(npcIndex: number, optionIndex: number, route = true): ClientActionResult {
         if (!this.ingame || !this.out || !this.localPlayer) {
             return { success: false, reason: 'not_in_game' };
         }
@@ -1144,7 +1144,7 @@ export class Client extends GameShell {
         // Attempt the route, but always dispatch (see talkToNpc): apnpc ops are
         // legitimately interactable at range through walls.
         const size = n.type?.size ?? 1;
-        const routed = this.tryMove(this.localPlayer.routeX[0], this.localPlayer.routeZ[0], n.routeX[0], n.routeZ[0], false, size, size, 0, 0, 0, 2);
+        const routed = route ? this.tryMove(this.localPlayer.routeX[0], this.localPlayer.routeZ[0], n.routeX[0], n.routeZ[0], false, size, size, 0, 0, 0, 2) : false;
 
         // Send the appropriate OPNPC packet based on option index
         const opcodes = [

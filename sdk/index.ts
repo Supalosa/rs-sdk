@@ -1211,9 +1211,9 @@ export class BotSDK {
         return this.sendAction({ type: 'interactLoc', x, z, locId, optionIndex: option, reason: 'SDK' });
     }
 
-    /** Interact with an NPC by index and option. */
-    async sendInteractNpc(npcIndex: number, option: number = 1): Promise<ActionResult> {
-        return this.sendAction({ type: 'interactNpc', npcIndex, optionIndex: option, reason: 'SDK' });
+    /** Interact with an NPC. Set route:false to preserve a position already in range; the server still validates reach. */
+    async sendInteractNpc(npcIndex: number, option: number = 1, options: { route?: boolean } = {}): Promise<ActionResult> {
+        return this.sendAction({ type: 'interactNpc', npcIndex, optionIndex: option, ...(options.route === undefined ? {} : { route: options.route }), reason: 'SDK' });
     }
 
     /** Interact with a player by index and option (1-5). Option 2 = Attack (wilderness), 3 = Follow, 4 = Trade. */

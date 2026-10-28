@@ -742,8 +742,8 @@ export class LiteClient {
     talkToNpc(npcIndex: number): ClientActionResult {
         return A.talkToNpc(this, npcIndex);
     }
-    interactNpc(npcIndex: number, optionIndex: number): ClientActionResult {
-        return A.interactNpc(this, npcIndex, optionIndex);
+    interactNpc(npcIndex: number, optionIndex: number, route = true): ClientActionResult {
+        return A.interactNpc(this, npcIndex, optionIndex, route);
     }
 
     /** Exact raw-table lookup for latency-critical, policy-gated hooks. */
