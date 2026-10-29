@@ -58,6 +58,8 @@ import {
     type CombatStyleState,
     type CombatStyleOption,
     type CombatEvent,
+    type MagicTabState,
+    type MagicSpellButton,
     type DialogState,
     type InterfaceState,
     type PrayerState,
@@ -173,6 +175,7 @@ export class BotStateCollector implements ScanProvider {
             inventory: this.collectInventory(INVENTORY_INTERFACE_ID),
             equipment: this.collectInventory(EQUIPMENT_INTERFACE_ID),
             combatStyle: this.collectCombatStyle(),
+            magicTab: this.collectMagicTab(),
             nearbyNpcs: this.collectNearbyNpcs(clientCycle),
             nearbyPlayers: this.collectNearbyPlayers(),
             nearbyLocs: this.collectNearbyLocs(),
@@ -847,6 +850,64 @@ export class BotStateCollector implements ScanProvider {
         } catch {
             return defaultState;
         }
+    }
+
+    /**
+     * Locate the magic side tab and list its cast buttons (teleports and other
+     * self-cast spells) with the global component ids the client sends in
+     * IF_BUTTON. The tab is recognised by content, not by position: any side
+     * tab whose tree contains graphic buttons labelled "Cast ..." is the magic
+     * tab, which keeps this build-independent.
+     */
+    private collectMagicTab(): MagicTabState {
+        const c = this.client as any;
+
+        const defaultState: MagicTabState = {
+            tabInterfaceId: -1,
+            tabIndex: -1,
+            buttons: [],
+            known: false
+        };
+
+        try {
+            const sideIcon: number[] = c.sideIcon ?? [];
+            for (let tabIndex = 0; tabIndex < sideIcon.length; tabIndex++) {
+                const interfaceId = sideIcon[tabIndex];
+                if (typeof interfaceId !== 'number' || interfaceId < 0) continue;
+
+                const root = IfType.list[interfaceId] as any;
+                if (!root) continue;
+
+                const buttons: MagicSpellButton[] = [];
+                const visit = (comId: number, depth: number): void => {
+                    const com = IfType.list[comId] as any;
+                    if (!com || depth > 3) return;
+                    // Graphic buttons (type 5) carry their "Cast ..." label in buttonText.
+                    if (com.type === 5 && typeof com.buttonText === 'string' && /^cast\b/i.test(com.buttonText.trim())) {
+                        buttons.push({ label: com.buttonText, componentId: com.id });
+                    }
+                    if (com.children) {
+                        for (const childId of com.children) visit(childId, depth + 1);
+                    }
+                };
+                if (root.children) {
+                    for (const childId of root.children) visit(childId, 1);
+                }
+
+                if (buttons.length > 0) {
+                    return {
+                        tabInterfaceId: interfaceId,
+                        tabIndex,
+                        buttons,
+                        known: true
+                    };
+                }
+            }
+        } catch {
+            return defaultState;
+        }
+
+        return defaultState;
     }
 
     private collectInventory(interfaceId: number): InventoryItem[] {

@@ -1660,6 +1660,34 @@ export class BotSDK {
     }
 
     /**
+     * Cast a self-target spell from the magic side tab (teleports, self-cast
+     * enchantments/alchemy buttons) by its button label, e.g.
+     * `await sdk.castMagicSpell(/trollheim teleport/i)`.
+     *
+     * The magic tab index and the button's global component id are resolved
+     * from the published `state.magicTab` (populated by clients that collect
+     * the magic tab layout); the call switches to the magic tab and clicks
+     * the button, which the server routes to the spell's if_button trigger.
+     * Dispatch success does not prove the server applied the cast - check
+     * position or XP for the effect.
+     */
+    async castMagicSpell(label: string | RegExp): Promise<ActionResult> {
+        const state = this.getState();
+        const magic = state?.magicTab;
+        if (!magic || !magic.known) {
+            return { success: false, reason: 'unknown', message: 'Magic tab layout not published by this client' };
+        }
+        const pattern = typeof label === 'string' ? new RegExp(label, 'i') : label;
+        const button = magic.buttons.find(b => pattern.test(b.label));
+        if (!button) {
+            return { success: false, reason: 'unknown', message: `No magic tab button matches ${label}` };
+        }
+        const tab = await this.sendSetTab(magic.tabIndex);
+        if (!tab.success) return tab;
+        return this.sendClickComponent(button.componentId);
+    }
+
+    /**
      * Send a single chat message. The server caps public chat at {@link maxMessageLength}
      * chars (400 on rs-sdk servers) and runs a word filter; `result.data` reports
      * `{ sent, truncated, filtered, finalText }` so you know if your message was clipped

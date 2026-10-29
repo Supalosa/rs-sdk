@@ -349,6 +349,26 @@ export interface CombatStyleState {
     known: boolean;
 }
 
+/** A cast button from the magic side tab (teleports, self-cast spells). */
+export interface MagicSpellButton {
+    /** Button label as rendered by the client, e.g. 'Cast Trollheim teleport'. */
+    label: string;
+    /** Global component id to pass to sendClickComponent after sendSetTab(tabIndex). */
+    componentId: number;
+}
+
+/** Magic side tab layout: which side tab it is and its cast-button component ids. */
+export interface MagicTabState {
+    /** Interface id of the magic side tab the server installed (-1 when unknown). */
+    tabInterfaceId: number;
+    /** Side tab index to pass to sendSetTab (-1 when unknown). */
+    tabIndex: number;
+    /** Cast buttons found in the magic tab (graphic buttons with a Cast option). */
+    buttons: MagicSpellButton[];
+    /** False when the magic tab could not be identified from the loaded interfaces. */
+    known: boolean;
+}
+
 /** Combat event for tracking damage, kills, etc. */
 export interface CombatEvent {
     /** Game tick when event occurred */
@@ -425,6 +445,8 @@ export interface BotState {
     equipment: InventoryItem[];
     quests?: import('../../../../sdk/types').QuestState;
     combatStyle: CombatStyleState;
+    /** Magic side tab layout (cast buttons + component ids); absent on older clients. */
+    magicTab?: MagicTabState;
     nearbyNpcs: NearbyNpc[];
     nearbyPlayers: NearbyPlayer[];
     nearbyLocs: NearbyLoc[];
