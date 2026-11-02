@@ -862,6 +862,9 @@ export class LiteClient {
     closeShop(): boolean {
         return A.closeShop(this);
     }
+    /** True after a full bank inventory packet, until transmission stops. */
+    bankContentsKnown = false;
+
     isBankOpen(): boolean {
         return A.isBankOpen(this);
     }

@@ -267,6 +267,8 @@ export interface TradeState {
 }
 
 export interface BankState {
+    /** Contents are backed by an active full inventory transmission. */
+    contentsKnown?: boolean;
     isOpen: boolean;
     items: BankItem[];
     /**

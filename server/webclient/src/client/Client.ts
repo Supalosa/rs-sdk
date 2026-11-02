@@ -1756,9 +1756,10 @@ export class Client extends GameShell {
         return true;
     }
 
-    /**
-     * Check if bank interface is open
-     */
+    /** Full bank inventory received; cleared when transmission stops. */
+    bankContentsKnown = false;
+
+    /** Check if bank interface is open. */
     isBankOpen(): boolean {
         const BANK_MAIN_ID = 5292;
         const BANK_SIDE_INV_ID = 2006;
@@ -8805,6 +8806,7 @@ export class Client extends GameShell {
 
             if (this.ptype === ServerProt.UPDATE_INV_STOP_TRANSMIT) {
                 const comId = this.in.g2();
+                if (comId === 5382) this.bankContentsKnown = false;
                 const inv: IfType = IfType.list[comId];
 
                 if (!inv.linkObjType || !inv.linkObjNumber) {
@@ -8848,6 +8850,7 @@ export class Client extends GameShell {
                     inv.linkObjNumber[i] = 0;
                 }
 
+                if (comId === 5382) this.bankContentsKnown = true;
                 this.ptype = -1;
                 return true;
             }

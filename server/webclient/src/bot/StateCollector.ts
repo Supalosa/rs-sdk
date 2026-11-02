@@ -1513,6 +1513,7 @@ export class BotStateCollector implements ScanProvider {
     private collectBankState(): BankState {
         const c = this.client as any;
         const bankState: BankState = {
+            contentsKnown: c.bankContentsKnown === true,
             isOpen: false,
             items: [],
             // varp 115 = %bankcert (varp.pack), the note/item withdrawal toggle.

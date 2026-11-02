@@ -302,7 +302,9 @@ export function dispatch(c: LiteClient, opcode: number, buf: Packet, psize: numb
 
         // ----------------------------------------------------------- inventory
         case ServerProt.UPDATE_INV_STOP_TRANSMIT: {
-            const inv = c.ifMutable(buf.g2());
+            const componentId = buf.g2();
+            if (componentId === 5382) c.bankContentsKnown = false;
+            const inv = c.ifMutable(componentId);
             if (inv?.linkObjType) {
                 for (let i = 0; i < inv.linkObjType.length; i++) {
                     inv.linkObjType[i] = 0;
@@ -311,7 +313,8 @@ export function dispatch(c: LiteClient, opcode: number, buf: Packet, psize: numb
             return;
         }
         case ServerProt.UPDATE_INV_FULL: {
-            const inv = c.ifMutable(buf.g2());
+            const componentId = buf.g2();
+            const inv = c.ifMutable(componentId);
             if (!inv?.linkObjType || !inv.linkObjNumber) {
                 return;
             }
@@ -328,6 +331,7 @@ export function dispatch(c: LiteClient, opcode: number, buf: Packet, psize: numb
                 inv.linkObjType[i] = 0;
                 inv.linkObjNumber[i] = 0;
             }
+            if (componentId === 5382) c.bankContentsKnown = true;
             return;
         }
         case ServerProt.UPDATE_INV_PARTIAL: {

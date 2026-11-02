@@ -328,6 +328,8 @@ export interface BankItem {
 }
 
 export interface BankState {
+    /** Full contents received and transmission has not stopped; false during UI transitions. */
+    contentsKnown?: boolean;
     isOpen: boolean;
     items: BankItem[];
     /**
