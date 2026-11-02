@@ -235,7 +235,8 @@ export class BotSDK {
         return this.clock ? this.clock.yield() : this.waitForTicks(1);
     }
     readonly config: Required<SDKConfig>;
-    private ws: WebSocket | null = null;
+    private ws: import('./types').SDKSocket | null = null;
+    private readonly customTransport: boolean;
     private state: BotWorldState | null = null;
     private stateReceivedAt: number = 0;
     /**
@@ -270,7 +271,9 @@ export class BotSDK {
     private intentionalDisconnect = false;
 
     constructor(config: SDKConfig) {
+        this.customTransport = !!config.socketFactory;
         this.config = {
+            socketFactory: config.socketFactory ?? ((url: string) => new WebSocket(url)),
             botUsername: config.botUsername,
             password: config.password || '',
             gatewayUrl: config.gatewayUrl || '',
@@ -337,12 +340,12 @@ export class BotSDK {
 
         const configuredUrl = this.config.gatewayUrl || `ws://${this.config.host}:${this.config.port}`;
         throwIfExecutionAborted();
-        this.connectPromise = preferDirectGateway(configuredUrl).then(url => new Promise<void>((resolve, reject) => {
+        this.connectPromise = (this.customTransport ? Promise.resolve(configuredUrl) : preferDirectGateway(configuredUrl)).then(url => new Promise<void>((resolve, reject) => {
             if (this.intentionalDisconnect) {
                 reject(new Error('Disconnected while connecting'));
                 return;
             }
-            this.ws = new WebSocket(url);
+            this.ws = this.config.socketFactory(url);
 
             // One deadline for the whole handshake - socket open AND the
             // gateway's sdk_connected/sdk_error answer. The old timer was

@@ -711,7 +711,12 @@ export interface ActionResult {
  */
 export type SDKConnectionMode = 'control' | 'observe';
 
+/** Socket surface used by the SDK; embedded hosts can supply an in-process transport. */
+export type SDKSocket = Pick<WebSocket, 'readyState' | 'send' | 'close' | 'onopen' | 'onmessage' | 'onclose' | 'onerror' | 'addEventListener' | 'removeEventListener'>;
+
 export interface SDKConfig {
+    /** Optional local transport. Omitted for ordinary gateway connections. */
+    socketFactory?: (url: string) => SDKSocket;
     botUsername: string;
     /** Password for gateway authentication */
     password?: string;
