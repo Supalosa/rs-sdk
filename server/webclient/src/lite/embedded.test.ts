@@ -18,7 +18,7 @@ async function until(predicate: () => boolean) {
     }
 }
 
-async function fixture(execute: (action: BotAction) => ActionResult | Promise<ActionResult> = () => ({ success: true, message: 'dispatched', phase: 'dispatch' })) {
+async function fixture(execute: (action: BotAction) => ActionResult | Promise<ActionResult> = () => ({ success: true, message: 'dispatched', phase: 'dispatch' }), authorize?:()=>void) {
     let finish!: () => void;
     let onTick = () => {};
     const calls: BotAction[] = [];
@@ -48,7 +48,7 @@ async function fixture(execute: (action: BotAction) => ActionResult | Promise<Ac
             finish();
         }
     } as unknown as LiteSession;
-    const socket = createEmbeddedSocket(options, { startSession: async () => session });
+    const socket = createEmbeddedSocket({...options,...(authorize?{authorize}:{})}, { startSession: async () => session });
     const messages: Record<string, any>[] = [];
     socket.onmessage = event => messages.push(JSON.parse(String(event.data)));
     cleanups.push(async () => {
@@ -110,6 +110,17 @@ test('expired queued work is acknowledged as failure and never dispatched', asyn
     await until(() => f.messages.some(message => message.actionId === 'expired'));
     expect(f.messages.find(message => message.actionId === 'expired')).toMatchObject({ result: { success: false, reason: 'queue_expired' } });
     expect(f.calls).toHaveLength(0);
+});
+test('lease authorization is checked at execution even when the expiry timer has not run', async () => {
+    let valid=true;
+    const f=await fixture(undefined,()=>{if(!valid)throw new Error('Lease expired');});
+    f.authenticate();
+    f.action('queued-before-expiry');
+    valid=false;
+    await until(()=>f.messages.some(message=>message.actionId==='queued-before-expiry'));
+    expect(f.calls).toHaveLength(0);
+    expect(f.messages.find(message=>message.actionId==='queued-before-expiry')).toMatchObject({result:{success:false,reason:'execution_error'}});
+    expect(()=>f.action('after-expiry')).toThrow('Lease expired');
 });
 
 test('queue saturation is rejected and an action exception does not strand subsequent work', async () => {

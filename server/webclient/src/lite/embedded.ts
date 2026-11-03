@@ -4,6 +4,7 @@ import { BotActionQueue, type QueuedBotAction } from '#/bot/ActionQueue.js';
 import type { BotAction } from '#/bot/types.js';
 import type { ActionResult } from '#/bot/ActionExecutor.js';
 import { installClientTestClock } from './test-clock.js';
+export const leaseAuthorizationVersion = 1;
 
 /** A local socket speaking the existing SDK message contract, with no gateway listener. */
 class EmbeddedSocket extends EventTarget {
@@ -82,6 +83,7 @@ class EmbeddedSocket extends EventTarget {
             this.message({ type: 'sdk_connected', maxMessageLength: this.session!.client.getMaxMessageLength() });
             this.publish();
         } else if (message.type === 'sdk_action' && this.authenticated) {
+            this.options.authorize?.();
             const queued = this.queue.enqueue({ action: message.action, actionId: message.actionId }, Math.max(0, (message.actionTimeoutMs ?? 60_000) - 1000));
             if (!queued) this.result(message.actionId, { success: false, message: 'Action queue is full', phase: 'validation', reason: 'busy' });
             if (this.testClock) queueMicrotask(() => this.pump());
@@ -147,6 +149,7 @@ class EmbeddedSocket extends EventTarget {
         const entry = this.queue.startNext();
         if (!entry) return;
         try {
+            this.options.authorize?.();
             const action = entry.action as BotAction;
             const result = action.type === 'testClockYield' ? (this.testClock ? this.testClock() : { success: false, message: 'Test clock unavailable' }) : this.session.client.executeBotAction(action);
             if (result instanceof Promise)

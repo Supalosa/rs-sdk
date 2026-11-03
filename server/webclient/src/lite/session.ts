@@ -34,6 +34,8 @@ const KEEPALIVE_CYCLES = 50;
 const IDLE_CYCLES = 3000; // ~60s, i.e. ~200 missed server ticks
 
 export interface SessionOptions {
+    /** Runtime-owned account authorization, checked immediately before game login. */
+    authorize?: () => void;
     /** Spread remote fleet starts over 5s by default; 0 disables the delay. */
     loginJitterMs?: number;
     host: string;
@@ -120,6 +122,7 @@ export async function startSession(opts: SessionOptions): Promise<LiteSession> {
 
     const connect = async () => {
         await Bun.sleep(loginJitterMs(opts.loginJitterMs ?? Number(process.env.LITE_LOGIN_JITTER_MS ?? (secured ? 5000 : 0))));
+        opts.authorize?.();
         return GameConnection.connect({
             host: opts.host,
             secured,

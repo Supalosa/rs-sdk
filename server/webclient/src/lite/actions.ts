@@ -32,6 +32,7 @@ import type { ClientActionResult, LiteClient } from './LiteClient.js';
 import { tryMoveTo } from './movement.js';
 
 const INVENTORY_INTERFACE_ID = 3214;
+const TRADE_SIDE_INV_ID = 3322;
 const EQUIPMENT_INTERFACE_ID = 1688;
 const BANK_MAIN_ID = 5292;
 const BANK_INV_ID = 5382;
@@ -415,7 +416,14 @@ export function clickInterfaceIop(c: LiteClient, componentId: number, optionInde
     // The engine's InvButtonHandler validates inv.hasAt(slot, obj) exactly, so
     // the real item id must go on the wire (0 only for genuinely empty slots,
     // matching the browser's clickInterfaceIop).
-    const itemId = slotItemId(componentId, slot);
+    // tradeside displays the same owned inventory slots as inventory:inv. Its
+    // first UPDATE_INV can lag an optimistic offer; obj 0 would then be silently
+    // rejected even when the server has already opened the trade. Use the known
+    // owned slot until that view arrives. Visibility/slot/obj validation remains
+    // authoritative on the server; an early packet is still allowed to fail.
+    const tradeSlotMissing = componentId === TRADE_SIDE_INV_ID &&
+        !((IfType.list[componentId]?.linkObjType?.[slot] ?? 0) > 0);
+    const itemId = slotItemId(tradeSlotMissing ? INVENTORY_INTERFACE_ID : componentId, slot);
 
     c.writeOpcode([ClientProt.INV_BUTTON1, ClientProt.INV_BUTTON2, ClientProt.INV_BUTTON3, ClientProt.INV_BUTTON4, ClientProt.INV_BUTTON5][optionIndex - 1]);
     c.out.p2(itemId);
