@@ -164,6 +164,11 @@ export async function startSession(opts: SessionOptions): Promise<LiteSession> {
         maxMessageLength: opts.maxMessageLength
     });
 
+    return startSessionLoop(client, connection, opts);
+}
+
+/** Packet-loop seam for local transport fixtures; login remains in startSession. */
+export function startSessionLoop(client: LiteClient, connection: GameConnection, opts: Pick<SessionOptions, 'username' | 'onEnd'>): LiteSession {
     let running = true;
     let cycles = 0;
     let idle = 0;
@@ -181,13 +186,19 @@ export async function startSession(opts: SessionOptions): Promise<LiteSession> {
                 end = { reason: 'logged-out' };
                 break;
             }
-            if (!client.isInGame()) {
-                end = { reason: 'disconnected' };
-                break;
-            }
-
             try {
+                // A peer can send LOGOUT and close between polls. Drain its
+                // buffered final packet before classifying the closed socket.
                 await client.pumpPackets();
+                if (!running) break;
+                if (client.isLoggedOut()) {
+                    end = { reason: 'logged-out' };
+                    break;
+                }
+                if (!client.isInGame()) {
+                    end = { reason: 'disconnected' };
+                    break;
+                }
 
                 if (++cycles % KEEPALIVE_CYCLES === 0) {
                     client.writeOpcode(ClientProt.NO_TIMEOUT);
@@ -200,7 +211,9 @@ export async function startSession(opts: SessionOptions): Promise<LiteSession> {
                 }
                 // Individual bad packets are contained in handlePacket, so a throw
                 // that reaches here is the stream or the socket, not one handler.
-                end = client.isInGame() ? { reason: 'error', error: err } : { reason: 'disconnected' };
+                end = client.isLoggedOut()
+                    ? { reason: 'logged-out' }
+                    : client.isInGame() ? { reason: 'error', error: err } : { reason: 'disconnected' };
                 break;
             }
 

@@ -14,7 +14,9 @@ class EmbeddedSocket extends EventTarget {
     onclose: ((event: Event) => void) | null = null;
     onerror: ((event: Event) => void) | null = null;
     readonly stopped: Promise<void>;
+    readonly logoutAcknowledged: Promise<boolean>;
     private finishStopped!: () => void;
+    private finishLogout!: (acknowledged: boolean) => void;
     private session?: LiteSession;
     private queue = new BotActionQueue();
     private timer?: ReturnType<typeof setInterval>;
@@ -29,6 +31,9 @@ class EmbeddedSocket extends EventTarget {
         super();
         this.stopped = new Promise(resolve => {
             this.finishStopped = resolve;
+        });
+        this.logoutAcknowledged = new Promise(resolve => {
+            this.finishLogout = resolve;
         });
         queueMicrotask(() => {
             void this.start();
@@ -63,10 +68,12 @@ class EmbeddedSocket extends EventTarget {
             this.readyState = 1;
             this.timer = setInterval(() => this.pump(), 20);
             this.event('open');
-            await this.session.stopped;
+            const end = await this.session.stopped;
+            this.finishLogout(end.reason === 'logged-out');
         } catch (error) {
             this.event('error', error instanceof Error ? error.message : 'Embedded session failed');
         } finally {
+            this.finishLogout(false);
             this.close();
             this.finishStopped();
         }

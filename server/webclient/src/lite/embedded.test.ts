@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
 import { createEmbeddedSocket } from './embedded.js';
-import type { LiteSession, SessionOptions } from './session.js';
+import type { LiteSession, SessionEnd, SessionOptions } from './session.js';
 import type { BotAction, BotWorldState } from '#/bot/types.js';
 import type { ActionResult } from '#/bot/ActionExecutor.js';
 
@@ -19,11 +19,11 @@ async function until(predicate: () => boolean) {
 }
 
 async function fixture(execute: (action: BotAction) => ActionResult | Promise<ActionResult> = () => ({ success: true, message: 'dispatched', phase: 'dispatch' }), authorize?:()=>void) {
-    let finish!: () => void;
+    let finish!: (end: SessionEnd) => void;
     let onTick = () => {};
     const calls: BotAction[] = [];
     const source = { tick: 0, inGame: true, inventory: [{ id: 995, count: 20 }] } as unknown as BotWorldState;
-    const stopped = new Promise<void>(resolve => {
+    const stopped = new Promise<SessionEnd>(resolve => {
         finish = resolve;
     });
     const session = {
@@ -45,7 +45,7 @@ async function fixture(execute: (action: BotAction) => ActionResult | Promise<Ac
         },
         stopped,
         stop() {
-            finish();
+            finish({ reason: 'stopped' });
         }
     } as unknown as LiteSession;
     const socket = createEmbeddedSocket({...options,...(authorize?{authorize}:{})}, { startSession: async () => session });
@@ -58,8 +58,21 @@ async function fixture(execute: (action: BotAction) => ActionResult | Promise<Ac
     await until(() => socket.readyState === 1);
     const authenticate = () => socket.send(JSON.stringify({ type: 'sdk_connect', username: options.username, password: options.password, mode: 'control' }));
     const action = (actionId: string, action: BotAction = { type: 'none', reason: 'fixture' }, timeout?: number) => socket.send(JSON.stringify({ type: 'sdk_action', actionId, action, actionTimeoutMs: timeout }));
-    return { socket, source, messages, calls, authenticate, action, tick: () => onTick() };
+    return { socket, source, messages, calls, authenticate, action, end: finish, tick: () => onTick() };
 }
+
+test('logout acknowledgement requires the server LOGOUT, not a local close or lost connection', async () => {
+    for (const reason of ['logged-out', 'disconnected', 'error', 'idle', 'stopped'] as const) {
+        const f = await fixture();
+        f.end({ reason });
+        expect(await f.socket.logoutAcknowledged).toBe(reason === 'logged-out');
+        await f.socket.stopped;
+        expect(f.socket.readyState).toBe(3);
+    }
+    const f = await fixture();
+    f.socket.close();
+    expect(await f.socket.logoutAcknowledged).toBe(false);
+});
 
 test('embedded authentication preserves identity checks and publishes isolated snapshots on game ticks', async () => {
     const f = await fixture();
