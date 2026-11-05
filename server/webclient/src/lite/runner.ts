@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { OutdatedClientError } from './net/GameConnection.js';
 import { startSession, type LiteSession } from './session.js';
 import { type ActionResult } from '#/bot/ActionExecutor.js';
+import { tradeTrace, tradeTraceAction, tradeTraceState } from '../../../../sdk/trade-diagnostics.js';
 import { installClientTestClock } from './test-clock.js';
 import { BotActionQueue, type QueuedBotAction } from '#/bot/ActionQueue.js';
 import type { BotAction, BotWorldState } from '#/bot/types.js';
@@ -174,6 +175,8 @@ class LiteGatewayRunner {
 
     private onAction(action: BotAction, actionId: string | null, actionTimeoutMs?: number): void {
         const queueTtlMs = actionTimeoutMs === undefined ? undefined : Math.max(0, actionTimeoutMs - 1_000);
+        tradeTrace(this.client.loginUser, 'runner', 'action-enqueue', () => ({ actionId, tick: this.serverTick,
+            activeActionId: this.actionQueue.active?.actionId, action: tradeTraceAction(action) }));
         const queued = this.actionQueue.enqueue({ action, actionId }, queueTtlMs);
         if (!queued) {
             const result: ActionResult = {
@@ -227,6 +230,9 @@ class LiteGatewayRunner {
         if (!queued) return;
 
         const action = queued.action;
+        tradeTrace(this.client.loginUser, 'runner', 'action-start', () => ({ actionId: queued.actionId,
+            tick: this.serverTick, action: tradeTraceAction(action) }));
+        this.client.tradeTraceActionId = queued.actionId;
         const resultOrPromise = action.type === 'testClockYield'
             ? (this.testClock ? this.testClock() : { success: false, message: 'Test clock unavailable' })
             : this.client.executeBotAction(action);
@@ -258,6 +264,7 @@ class LiteGatewayRunner {
 
         const publishResult = this.actionQueue.isCurrentGeneration(entry);
         this.actionQueue.complete(entry);
+        if (this.client.tradeTraceActionId === entry.actionId) this.client.tradeTraceActionId = null;
         if (!publishResult) return;
 
         if (entry.actionId) {
@@ -267,6 +274,8 @@ class LiteGatewayRunner {
     }
 
     private sendActionResult(actionId: string, result: ActionResult): void {
+        tradeTrace(this.client.loginUser, 'runner', 'action-result', () => ({ actionId, tick: this.serverTick,
+            success: result.success, phase: result.phase, reason: result.reason }));
         this.send({ type: 'actionResult', actionId, result });
     }
 
@@ -295,6 +304,7 @@ class LiteGatewayRunner {
         if (!this.wsConnected) return;
         const state = this.client.collectBotState(this.serverTick);
         if (!state) return;
+        tradeTrace(this.client.loginUser, 'runner', 'state-publish', () => tradeTraceState(state));
         if (this.fastKbdAttackEnabled) {
             const targetIndex = findFastKbdAttackTarget(state);
             if (targetIndex !== undefined && this.lastFastKbdAttackTick !== this.serverTick) {

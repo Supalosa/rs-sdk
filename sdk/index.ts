@@ -36,6 +36,7 @@ import { LockstepClock } from './clock';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { executionContext, executionWait, throwIfExecutionAborted } from './execution-context';
 import { redactCredentials } from './redact';
+import { tradeTrace, tradeTraceAction, tradeTraceState } from './trade-diagnostics';
 import * as pathfinding from './pathfinding';
 import { PathfindingClient, type PathResult, type PathWaypoint, type DoorRoute } from './pathfinding-client';
 import { resolveInterfaceOption, shortestNameMatch, type InterfaceOptionSelector } from './action-quantity';
@@ -1164,17 +1165,21 @@ export class BotSDK {
         }
 
         const actionId = `act-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        tradeTrace(this.config.botUsername, 'sdk', 'action-submit', () => ({ actionId,
+            action: tradeTraceAction(action), stateAgeMs: this.getStateAge(), state: tradeTraceState(this.state) }));
 
         try {
             return await executionWait<ActionResult>((resolve, reject) => {
                 const timeout = setTimeout(() => {
                     this.pendingActions.delete(actionId);
+                    tradeTrace(this.config.botUsername, 'sdk', 'action-timeout', () => ({ actionId, action: tradeTraceAction(action) }));
                     reject(new ActionDispatchError(`Action timed out: ${action.type}`, 'timeout'));
                 }, this.config.actionTimeout);
 
                 this.pendingActions.set(actionId, { resolve, reject, timeout });
 
                 try {
+                    tradeTrace(this.config.botUsername, 'sdk', 'action-send', () => ({ actionId }));
                     this.send({
                         type: 'sdk_action',
                         username: this.config.botUsername,
@@ -2164,6 +2169,8 @@ export class BotSDK {
                 }) as SkillState[];
             }
 
+            tradeTrace(this.config.botUsername, 'sdk', 'state-received', () => ({
+                publishedAt: message.stateReceivedAt, state: tradeTraceState(message.state) }));
             this.state = message.state;
             // Use server timestamp if available, otherwise use local time
             this.stateReceivedAt = message.stateReceivedAt || Date.now();
@@ -2177,6 +2184,9 @@ export class BotSDK {
         }
 
         if (message.type === 'sdk_action_result' && message.actionId) {
+            tradeTrace(this.config.botUsername, 'sdk', 'action-result', () => ({ actionId: message.actionId,
+                pending: this.pendingActions.has(message.actionId!), success: message.result?.success,
+                phase: message.result?.phase, reason: message.result?.reason }));
             const pending = this.pendingActions.get(message.actionId);
             if (pending) {
                 clearTimeout(pending.timeout);

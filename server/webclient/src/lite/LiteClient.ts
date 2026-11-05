@@ -50,6 +50,7 @@ import { buildCollision } from './world/CollisionBuilder.js';
 import { handlePacket } from './protocol/incoming.js';
 import { findPathToTile, tryMoveTo } from './movement.js';
 import * as A from './actions.js';
+import { tradeTrace, tradeTraceEnabled } from '../../../../sdk/trade-diagnostics.js';
 
 export const MAX_PLAYER_COUNT = 2048;
 export const LOCAL_PLAYER_INDEX = 2047;
@@ -673,7 +674,14 @@ export class LiteClient {
     // ------------------------------------------------------ outgoing plumbing
 
     /** Queue an opcode with ISAAC encoding, matching Client.writePacketOpcode. */
+    tradeTraceActionId: string | null = null;
+    private tradeTracePackets: { start: number; end?: number; opcode: number; actionId: string | null }[] = [];
     writeOpcode(opcode: ClientProt): void {
+        if (tradeTraceEnabled(this.loginUser)) {
+            const previous = this.tradeTracePackets.at(-1);
+            if (previous) previous.end = this.out.pos;
+            this.tradeTracePackets.push({ start: this.out.pos, opcode, actionId: this.tradeTraceActionId });
+        }
         this.conn.out.p1Enc(opcode);
     }
 
@@ -682,7 +690,20 @@ export class LiteClient {
     }
 
     flush(): void {
+        const selected = new Set<number>([ClientProt.OPPLAYER4, ClientProt.INV_BUTTON1, ClientProt.INV_BUTTON2,
+            ClientProt.INV_BUTTON3, ClientProt.INV_BUTTON4, ClientProt.INV_BUTTON5, ClientProt.IF_BUTTON,
+            ClientProt.OPLOC1, ClientProt.CLOSE_MODAL, ClientProt.RESUME_PAUSEBUTTON]);
+        const packets = this.tradeTracePackets;
+        this.tradeTracePackets = [];
+        for (const p of packets) if (selected.has(p.opcode)) {
+            tradeTrace(this.loginUser, 'lite', 'packet-flush-attempt', () => ({ actionId: p.actionId, opcode: p.opcode,
+                cycle: this.cycle.value, payload: Array.from(this.out.data.subarray(p.start + 1, p.end ?? this.out.pos)),
+                main: this.mainModalId, chat: this.chatModalId, side: this.sideModalId }));
+        }
+        const bytes = this.out.pos;
         this.conn.flush();
+        if (packets.some(p => selected.has(p.opcode))) tradeTrace(this.loginUser, 'lite', 'flush-returned', () => ({
+            bytes, remainingBytes: this.out.pos, cycle: this.cycle.value }));
     }
 
     // ----------------------------------------------------------- type lookups

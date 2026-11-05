@@ -32,6 +32,7 @@ import { LiteClient, MAX_PLAYER_COUNT } from '../LiteClient.js';
 import { buildCollision } from '../world/CollisionBuilder.js';
 import { getNpcPos, getPlayerPos, screenNameOf } from './entities.js';
 import { zonePacket } from './zone.js';
+import { tradeTrace, tradeTraceEnabled } from '../../../../../sdk/trade-diagnostics.js';
 
 /**
  * Read and process at most one packet. Returns false when the socket has nothing
@@ -86,6 +87,15 @@ export async function handlePacket(c: LiteClient): Promise<boolean> {
     const psize = c.psize;
     c.ptype = -1;
     c.packetsReceived++;
+    const traced = tradeTraceEnabled(c.loginUser) && [ServerProt.IF_OPENCHAT, ServerProt.IF_OPENMAIN_SIDE,
+        ServerProt.IF_CLOSE, ServerProt.IF_OPENMAIN, ServerProt.IF_OPENSIDE, ServerProt.IF_SETTEXT,
+        ServerProt.UPDATE_INV_STOP_TRANSMIT, ServerProt.UPDATE_INV_FULL, ServerProt.UPDATE_INV_PARTIAL,
+        ServerProt.UPDATE_STAT, ServerProt.UNSET_MAP_FLAG, ServerProt.MESSAGE_GAME, ServerProt.PLAYER_INFO].includes(opcode);
+    if (traced) tradeTrace(c.loginUser, 'lite', 'packet-received', () => ({ opcode, size: psize,
+        packetSequence: c.packetsReceived, cycle: c.cycle.value,
+        payload: opcode === ServerProt.PLAYER_INFO ? undefined : Array.from(buf.data.subarray(0, Math.min(psize, 512))),
+        truncated: opcode !== ServerProt.PLAYER_INFO && psize > 512,
+        main: c.mainModalId, chat: c.chatModalId, side: c.sideModalId }));
 
     // A handler that throws is a bad packet, not a dead session: the framing above
     // already consumed exactly psize bytes, so the stream is still in sync - the
@@ -94,6 +104,11 @@ export async function handlePacket(c: LiteClient): Promise<boolean> {
     // recordDispatchError).
     try {
         dispatch(c, opcode, buf, psize);
+        if (traced) tradeTrace(c.loginUser, 'lite', 'packet-applied', () => ({ opcode,
+            packetSequence: c.packetsReceived, cycle: c.cycle.value,
+            main: c.mainModalId, chat: c.chatModalId, side: c.sideModalId,
+            dialog: c.chatModalId === -1 ? undefined : c.getDialogText().slice(0, 12),
+            rc: { level: c.statBaseLevel[20], xp: c.statXP[20] } }));
     } catch (err) {
         c.recordDispatchError(opcode, err);
     }

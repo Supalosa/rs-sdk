@@ -3,6 +3,7 @@ import { startSession, type LiteSession, type SessionOptions } from './session.j
 import { BotActionQueue, type QueuedBotAction } from '#/bot/ActionQueue.js';
 import type { BotAction } from '#/bot/types.js';
 import type { ActionResult } from '#/bot/ActionExecutor.js';
+import { tradeTrace, tradeTraceAction, tradeTraceState } from '../../../../sdk/trade-diagnostics.js';
 import { installClientTestClock } from './test-clock.js';
 export const leaseAuthorizationVersion = 1;
 
@@ -91,6 +92,8 @@ class EmbeddedSocket extends EventTarget {
             this.publish();
         } else if (message.type === 'sdk_action' && this.authenticated) {
             this.options.authorize?.();
+            tradeTrace(this.options.username, 'embedded', 'action-enqueue', () => ({ actionId: message.actionId, tick: this.tick,
+                activeActionId: this.queue.active?.actionId, action: tradeTraceAction(message.action) }));
             const queued = this.queue.enqueue({ action: message.action, actionId: message.actionId }, Math.max(0, (message.actionTimeoutMs ?? 60_000) - 1000));
             if (!queued) this.result(message.actionId, { success: false, message: 'Action queue is full', phase: 'validation', reason: 'busy' });
             if (this.testClock) queueMicrotask(() => this.pump());
@@ -113,17 +116,23 @@ class EmbeddedSocket extends EventTarget {
         this.event('close');
     }
     private result(actionId: string | null, result: ActionResult) {
+        tradeTrace(this.options.username, 'embedded', 'action-result', () => ({ actionId, tick: this.tick,
+            success: result.success, phase: result.phase, reason: result.reason }));
         if (actionId) this.message({ type: 'sdk_action_result', actionId, result });
     }
     private publish() {
         if (!this.authenticated || !this.session) return;
         const state = this.session.client.collectBotState(this.tick);
-        if (state) this.message({ type: 'sdk_state', state, stateReceivedAt: Date.now() });
+        if (state) {
+            tradeTrace(this.options.username, 'embedded', 'state-publish', () => tradeTraceState(state));
+            this.message({ type: 'sdk_state', state, stateReceivedAt: Date.now() });
+        }
     }
     private complete(entry: QueuedBotAction, result: ActionResult) {
         if (this.queue.active !== entry) return;
         const current = this.queue.isCurrentGeneration(entry);
         this.queue.complete(entry);
+        if (this.session?.client.tradeTraceActionId === entry.actionId) this.session.client.tradeTraceActionId = null;
         if (current) {
             this.result(entry.actionId, result);
             this.publish();
@@ -158,6 +167,9 @@ class EmbeddedSocket extends EventTarget {
         try {
             this.options.authorize?.();
             const action = entry.action as BotAction;
+            tradeTrace(this.options.username, 'embedded', 'action-start', () => ({ actionId: entry.actionId,
+                tick: this.tick, action: tradeTraceAction(action) }));
+            this.session.client.tradeTraceActionId = entry.actionId;
             const result = action.type === 'testClockYield' ? (this.testClock ? this.testClock() : { success: false, message: 'Test clock unavailable' }) : this.session.client.executeBotAction(action);
             if (result instanceof Promise)
                 void result.then(
