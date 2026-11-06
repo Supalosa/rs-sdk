@@ -327,7 +327,17 @@ export interface BankItem {
     count: number;
 }
 
+/** A bank view captured once at a client tick boundary, retained when the bank closes. */
+export interface BankTickObservation {
+    clientGeneration: number;
+    clientTick: number;
+    /** Diagnostic capture time; never an ordering key. */
+    observedAt: string;
+    items: BankItem[];
+}
+
 export interface BankState {
+    observation?: BankTickObservation;
     /** Full contents received and transmission has not stopped; false during UI transitions. */
     contentsKnown?: boolean;
     isOpen: boolean;
@@ -590,6 +600,8 @@ export interface OpFeedbackState {
 }
 
 export interface BotWorldState {
+    /** Stable for this game-client connection; increments before a replacement starts. */
+    clientGeneration?: number;
     /** Current game-provided hint arrow; null means no active arrow. */
     hint?: {type:'tile';x:number;z:number}|{type:'npc'|'player';index:number}|null;
     tabs?: {running?:boolean;active:number;flashing:number|null;available:{index:number;name:string}[];tutorialText:string[]};

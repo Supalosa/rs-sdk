@@ -75,6 +75,7 @@ export interface ClientActionResult {
 }
 
 export interface LiteClientOptions {
+    bankClientGeneration?: number;
     connection: GameConnection;
     locIndex: LocIndex;
     username: string;
@@ -83,6 +84,7 @@ export interface LiteClientOptions {
 }
 
 export class LiteClient {
+    readonly bankClientGeneration: number;
     // ---- fields the bot bridge reads via `(client as any)` -------------------
     // Names and types match Client.ts exactly. Do not rename without updating
     // StateCollector.ts - tsc will not catch it, the accesses are `as any`.
@@ -230,6 +232,7 @@ export class LiteClient {
     })();
 
     constructor(opts: LiteClientOptions) {
+        this.bankClientGeneration = opts.bankClientGeneration ?? 0;
         this.conn = opts.connection;
         this.locIndex = opts.locIndex;
         this.loginUser = opts.username;

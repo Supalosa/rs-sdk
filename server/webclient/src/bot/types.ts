@@ -266,7 +266,17 @@ export interface TradeState {
     partnerAccepted: boolean;
 }
 
+/** A bank view captured once at a client tick boundary, retained when the bank closes. */
+export interface BankTickObservation {
+    clientGeneration: number;
+    clientTick: number;
+    /** Diagnostic capture time; never an ordering key. */
+    observedAt: string;
+    items: BankItem[];
+}
+
 export interface BankState {
+    observation?: BankTickObservation;
     /** Contents are backed by an active full inventory transmission. */
     contentsKnown?: boolean;
     isOpen: boolean;
@@ -436,6 +446,8 @@ export interface OpFeedbackState {
 }
 
 export interface BotState {
+    /** Stable for this game-client connection; increments before a replacement starts. */
+    clientGeneration?: number;
     hint?: import('../../../../sdk/types').BotWorldState['hint'];
     tabs?: import('../../../../sdk/types').BotWorldState['tabs'];
     tick: number;

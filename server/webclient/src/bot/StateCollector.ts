@@ -1,3 +1,4 @@
+import { BankObservationTracker } from './BankObservation.js';
 import {collectHintArrow} from './hint-arrow';
 import {collectTabs} from './tabs';
 // StateCollector.ts - Collects game state from the client
@@ -131,6 +132,8 @@ export class BotStateCollector implements ScanProvider {
     private readonly reachProbe: ReachProbe;
     private reachabilityEnabled = true;
 
+    private bankObservations = new BankObservationTracker();
+
     constructor(client: Client) {
         this.client = client;
         this.reachProbe = new ReachProbe(client as any);
@@ -169,6 +172,7 @@ export class BotStateCollector implements ScanProvider {
 
         return {
             tick: currentTick,
+            clientGeneration: (this.client as any).bankClientGeneration ?? 0,
             revision: this.publicationRevision,
             player: this.collectPlayerState(currentTick, clientCycle),
             skills: this.collectSkills(),
@@ -184,7 +188,7 @@ export class BotStateCollector implements ScanProvider {
             recentDialogs: this.collectRecentDialogs(currentTick, publish),
             menuActions: this.collectMenuActions(),
             shop: this.collectShopState(),
-            bank: this.collectBankState(),
+            bank: this.collectBankState(currentTick, publish),
             trade: this.collectTradeState(),
             ge: collectGEState(IfType.list, c.mainModalId ?? -1),
             inGame: c.ingame || false,
@@ -1510,7 +1514,7 @@ export class BotStateCollector implements ScanProvider {
         return shopState;
     }
 
-    private collectBankState(): BankState {
+    private collectBankState(currentTick: number, publish: boolean): BankState {
         const c = this.client as any;
         const bankState: BankState = {
             contentsKnown: c.bankContentsKnown === true,
@@ -1538,6 +1542,12 @@ export class BotStateCollector implements ScanProvider {
             }
         }
 
+        // The backing bank inventory remains meaningful after the modal closes.
+        // STOP_TRANSMIT invalidates it explicitly; a closed UI alone does not.
+        const completeBank = bankState.contentsKnown === true && typeof c.getBankItems === 'function'
+            ? { ...bankState, items: c.getBankItems() }
+            : bankState;
+        bankState.observation = this.bankObservations.observe(currentTick, c.bankClientGeneration ?? 0, completeBank, publish);
         return bankState;
     }
 

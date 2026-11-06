@@ -359,3 +359,26 @@ describe('BotStateCollector combat styles', () => {
         ]);
     });
 });
+
+test('bank collector freezes a complete backing inventory per tick and retains it through modal closure', () => {
+    const client = createClient();
+    let open = true;
+    let items = [{ slot: 0, id: 995, name: 'Coins', count: 20 }];
+    Object.assign(client, { bankClientGeneration: 3, bankContentsKnown: true,
+        isBankOpen: () => open, getBankItems: () => items });
+    const collector = new BotStateCollector(client);
+    const collect = (tick: number, publish = true) => (collector as any).collectBankState(tick, publish);
+    const first = collect(10).observation;
+    items = [{ ...items[0], count: 30 }];
+    expect(collect(10).observation).toEqual(first);
+    expect(collect(11, false).observation).toEqual(first);
+    open = false;
+    const closed = collect(11);
+    expect(closed.items).toEqual([]);
+    expect(closed.observation).toMatchObject({ clientGeneration: 3, clientTick: 11, items: [{ count: 30 }] });
+    (client as any).bankContentsKnown = false;
+    items = [];
+    expect(collect(12).observation).toEqual(closed.observation);
+    (client as any).bankContentsKnown = true;
+    expect(collect(13).observation).toMatchObject({ clientTick: 13, items: [] });
+});

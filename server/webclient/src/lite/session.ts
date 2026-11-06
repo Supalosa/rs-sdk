@@ -34,6 +34,7 @@ const KEEPALIVE_CYCLES = 50;
 const IDLE_CYCLES = 3000; // ~60s, i.e. ~200 missed server ticks
 
 export interface SessionOptions {
+    bankClientGeneration?: number;
     /** Runtime-owned account authorization, checked immediately before game login. */
     authorize?: () => void;
     /** Spread remote fleet starts over 5s by default; 0 disables the delay. */
@@ -157,6 +158,7 @@ export async function startSession(opts: SessionOptions): Promise<LiteSession> {
     }
 
     const client = new LiteClient({
+        bankClientGeneration: opts.bankClientGeneration,
         connection,
         locIndex,
         username: opts.username,
