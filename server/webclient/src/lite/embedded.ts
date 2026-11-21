@@ -1,5 +1,6 @@
 import './dom-shim.js';
 import { startSession, type LiteSession, type SessionOptions } from './session.js';
+import { LoginError, OutdatedClientError } from './net/GameConnection.js';
 import { BotActionQueue, type QueuedBotAction } from '#/bot/ActionQueue.js';
 import type { BotAction } from '#/bot/types.js';
 import type { ActionResult } from '#/bot/ActionExecutor.js';
@@ -54,8 +55,9 @@ class EmbeddedSocket extends EventTarget {
         this.onmessage?.(event);
     }
     private async start() {
+        let stage = 'session startup';
         try {
-            this.session = await this.connectSession(this.options);
+            this.session = await this.connectSession(this.options, current => { stage = current; });
             if (this.readyState === 3) {
                 this.session.stop();
                 await this.session.stopped;
@@ -67,12 +69,17 @@ class EmbeddedSocket extends EventTarget {
                 this.publish();
             });
             this.readyState = 1;
-            this.timer = setInterval(() => this.pump(), 20);
+            this.timer = setInterval(() => this.pump(), 5);
             this.event('open');
             const end = await this.session.stopped;
             this.finishLogout(end.reason === 'logged-out');
         } catch (error) {
-            this.event('error', error instanceof Error ? error.message : 'Embedded session failed');
+            // Transport and cache errors may include URLs or paths. Expose only
+            // the stage and protocol diagnostics, never the raw exception text.
+            const detail = error instanceof OutdatedClientError
+                ? ': client revision or cache mismatch'
+                : error instanceof LoginError ? `: game login response ${error.code}` : '';
+            this.event('error', `Embedded session failed during ${stage}${detail}`);
         } finally {
             this.finishLogout(false);
             this.close();
@@ -176,7 +183,8 @@ class EmbeddedSocket extends EventTarget {
                     value => this.complete(entry, value as ActionResult),
                     () => this.complete(entry, { success: false, message: 'Action execution failed', phase: 'completion', reason: 'execution_error' })
                 );
-            else if (action.type === 'wait' && result.success) this.waiting = action.ticks || 1;
+            // Keep the existing wait duration when polling the action queue faster.
+            else if (action.type === 'wait' && result.success) this.waiting = (action.ticks || 1) * 4;
             else this.complete(entry, result);
         } catch {
             this.complete(entry, { success: false, message: 'Action execution failed', phase: 'completion', reason: 'execution_error' });

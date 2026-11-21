@@ -261,6 +261,7 @@ export class LiteClient {
      * the socket is dry.
      */
     private packetPump: Promise<void> = Promise.resolve();
+    private pendingGameTicks = 0;
 
     pumpPackets(): Promise<void> {
         const task = this.packetPump.then(() => this.drainPackets());
@@ -276,6 +277,9 @@ export class LiteClient {
             }
         }
         this.snapEntities();
+        const ticks = this.pendingGameTicks;
+        this.pendingGameTicks = 0;
+        for (let tick = 0; tick < ticks; tick++) this.onGameTickCallback?.();
     }
 
     /**
@@ -449,7 +453,8 @@ export class LiteClient {
         }
         this.lastTickTime = now;
 
-        this.onGameTickCallback?.();
+        // Inventory and interface updates can follow PLAYER_INFO in the same drain.
+        this.pendingGameTicks++;
     }
 
     isInGame(): boolean {

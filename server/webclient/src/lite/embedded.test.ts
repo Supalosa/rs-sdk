@@ -1,5 +1,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import { createEmbeddedSocket } from './embedded.js';
+import { BotSDK } from '../../../../sdk/index.js';
+import { CLIENT_VERSION, LoginError } from './net/GameConnection.js';
 import type { LiteSession, SessionEnd, SessionOptions } from './session.js';
 import type { BotAction, BotWorldState } from '#/bot/types.js';
 import type { ActionResult } from '#/bot/ActionExecutor.js';
@@ -182,4 +184,43 @@ test('closing during session startup waits for session cleanup and publishes no 
     stopped();
     await socket.stopped;
     expect(opens).toBe(0);
+});
+
+test('SDK reconnect surfaces a sanitized embedded login failure', async () => {
+    let attempt = 0;
+    const sdk = new BotSDK({
+        botUsername: options.username, password: options.password,
+        gatewayUrl: 'ws://embedded.invalid', autoLaunchBrowser: false, autoReconnect: false,
+        socketFactory: () => createEmbeddedSocket(options, {
+            startSession: async (_opts, stage) => {
+                if (++attempt === 1) {
+                    stage?.('cache preparation');
+                    throw new Error(`private cache path containing ${options.password}`);
+                }
+                stage?.('game connection/login');
+                throw new LoginError(5, `private login detail containing ${options.password}`);
+            }
+        })
+    });
+    cleanups.push(() => sdk.disconnect());
+    await expect(sdk.connect()).rejects.toThrow(/^Embedded session failed during cache preparation$/);
+    await expect(sdk.connect()).rejects.toThrow(/^Embedded session failed during game connection\/login: game login response 5$/);
+    expect(attempt).toBe(2);
+});
+
+test('real embedded startup reports a loopback revision mismatch without attempting login', async () => {
+    const paths: string[] = [];
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+        paths.push(new URL(request.url).pathname);
+        return Response.json({ revision: CLIENT_VERSION + 1 });
+    } });
+    cleanups.push(() => server.stop(true));
+    const sdk = new BotSDK({
+        botUsername: options.username, password: options.password,
+        gatewayUrl: 'ws://embedded.invalid', autoLaunchBrowser: false, autoReconnect: false,
+        socketFactory: () => createEmbeddedSocket({ ...options, host: `127.0.0.1:${server.port}` })
+    });
+    cleanups.push(() => sdk.disconnect());
+    await expect(sdk.connect()).rejects.toThrow(/^Embedded session failed during revision check: client revision or cache mismatch$/);
+    expect(paths).toEqual(['/api/version']);
 });

@@ -103,7 +103,10 @@ async function fetchServerRevision(origin: string): Promise<number | null> {
     }
 }
 
-export async function startSession(opts: SessionOptions): Promise<LiteSession> {
+export async function startSession(
+    opts: SessionOptions,
+    onStage?: (stage: 'revision check' | 'cache preparation' | 'login authorization' | 'game connection/login' | 'client initialization') => void
+): Promise<LiteSession> {
     if (opts.profanityFilter !== undefined) {
         WordFilter.enabled = opts.profanityFilter;
     }
@@ -113,17 +116,21 @@ export async function startSession(opts: SessionOptions): Promise<LiteSession> {
 
     // Fail with the fix, not a decode error or an opaque login response 6, when the server
     // has moved to another revision. Servers without /api/version skip the check.
+    onStage?.('revision check');
     const serverRevision = await fetchServerRevision(origin);
     if (serverRevision !== null && serverRevision !== CLIENT_VERSION) {
         throw new OutdatedClientError(origin, serverRevision);
     }
 
+    onStage?.('cache preparation');
     let { checksums } = await loadCache({ origin, cacheDir, members: opts.members, quiet: opts.quiet });
     let locIndex = await LocIndex.load({ origin, cacheDir, versionlistCrc: checksums[5], quiet: opts.quiet });
 
     const connect = async () => {
         await Bun.sleep(loginJitterMs(opts.loginJitterMs ?? Number(process.env.LITE_LOGIN_JITTER_MS ?? (secured ? 5000 : 0))));
+        onStage?.('login authorization');
         opts.authorize?.();
+        onStage?.('game connection/login');
         return GameConnection.connect({
             host: opts.host,
             secured,
@@ -145,6 +152,7 @@ export async function startSession(opts: SessionOptions): Promise<LiteSession> {
             throw err;
         }
         const stale = checksums;
+        onStage?.('cache preparation');
         invalidateCache();
         ({ checksums } = await loadCache({ origin, cacheDir, members: opts.members, quiet: opts.quiet }));
         if (checksums.every((crc, i) => crc === stale[i])) {
@@ -157,6 +165,7 @@ export async function startSession(opts: SessionOptions): Promise<LiteSession> {
         connection = await connect();
     }
 
+    onStage?.('client initialization');
     const client = new LiteClient({
         bankClientGeneration: opts.bankClientGeneration,
         connection,

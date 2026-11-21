@@ -406,7 +406,8 @@ export class BotSDK {
             this.ws.onerror = (error) => {
                 console.warn('[LOGOUT DEBUG] SDK WebSocket error event');
                 clearTimeout(deadline);
-                reject(new Error('WebSocket error'));
+                const detail = this.customTransport && (error as ErrorEvent).message;
+                reject(new Error(detail || 'WebSocket error'));
             };
 
             const checkConnected = (event: MessageEvent) => {
