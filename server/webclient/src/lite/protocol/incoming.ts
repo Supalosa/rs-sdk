@@ -33,6 +33,7 @@ import { buildCollision } from '../world/CollisionBuilder.js';
 import { getNpcPos, getPlayerPos, screenNameOf } from './entities.js';
 import { zonePacket } from './zone.js';
 import { tradeTrace, tradeTraceEnabled } from '../../../../../sdk/trade-diagnostics.js';
+import { offerBoundaryEnabled, offerBoundaryTrace } from '../../../../../sdk/offer-boundary-trace.js';
 
 /**
  * Read and process at most one packet. Returns false when the socket has nothing
@@ -87,6 +88,14 @@ export async function handlePacket(c: LiteClient): Promise<boolean> {
     const psize = c.psize;
     c.ptype = -1;
     c.packetsReceived++;
+    if (offerBoundaryEnabled() && psize >= 2 && (opcode === ServerProt.UPDATE_INV_FULL || opcode === ServerProt.UPDATE_INV_PARTIAL)) {
+        const componentId = buf.data[0] * 256 + buf.data[1];
+        if (componentId === 3415 || componentId === 3416) {
+            offerBoundaryTrace(c.loginUser, 'offer-packet-received', () => ({
+                componentId, opcode, cycle: c.cycle.value, packetSequence: c.packetsReceived,
+            }));
+        }
+    }
     const traced = tradeTraceEnabled(c.loginUser) && [ServerProt.IF_OPENCHAT, ServerProt.IF_OPENMAIN_SIDE,
         ServerProt.IF_CLOSE, ServerProt.IF_OPENMAIN, ServerProt.IF_OPENSIDE, ServerProt.IF_SETTEXT,
         ServerProt.UPDATE_INV_STOP_TRANSMIT, ServerProt.UPDATE_INV_FULL, ServerProt.UPDATE_INV_PARTIAL,

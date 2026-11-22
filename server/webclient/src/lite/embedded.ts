@@ -5,6 +5,7 @@ import { BotActionQueue, type QueuedBotAction } from '#/bot/ActionQueue.js';
 import type { BotAction } from '#/bot/types.js';
 import type { ActionResult } from '#/bot/ActionExecutor.js';
 import { tradeTrace, tradeTraceAction, tradeTraceState } from '../../../../sdk/trade-diagnostics.js';
+import { offerBoundaryEnabled, offerBoundarySnapshot, offerBoundaryTrace } from '../../../../sdk/offer-boundary-trace.js';
 import { installClientTestClock } from './test-clock.js';
 export const leaseAuthorizationVersion = 1;
 
@@ -131,6 +132,9 @@ class EmbeddedSocket extends EventTarget {
         if (!this.authenticated || !this.session) return;
         const state = this.session.client.collectBotState(this.tick);
         if (state) {
+            if (offerBoundaryEnabled() && state.trade?.screen === 'offer') {
+                offerBoundaryTrace(this.options.username, 'offer-snapshot-published', () => offerBoundarySnapshot(state));
+            }
             tradeTrace(this.options.username, 'embedded', 'state-publish', () => tradeTraceState(state));
             this.message({ type: 'sdk_state', state, stateReceivedAt: Date.now() });
         }

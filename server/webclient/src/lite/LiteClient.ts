@@ -51,6 +51,7 @@ import { handlePacket } from './protocol/incoming.js';
 import { findPathToTile, tryMoveTo } from './movement.js';
 import * as A from './actions.js';
 import { tradeTrace, tradeTraceEnabled } from '../../../../sdk/trade-diagnostics.js';
+import { offerBoundaryEnabled, offerBoundaryTrace } from '../../../../sdk/offer-boundary-trace.js';
 
 export const MAX_PLAYER_COUNT = 2048;
 export const LOCAL_PLAYER_INDEX = 2047;
@@ -685,7 +686,8 @@ export class LiteClient {
     tradeTraceActionId: string | null = null;
     private tradeTracePackets: { start: number; end?: number; opcode: number; actionId: string | null }[] = [];
     writeOpcode(opcode: ClientProt): void {
-        if (tradeTraceEnabled(this.loginUser)) {
+        if (tradeTraceEnabled(this.loginUser) || (offerBoundaryEnabled() &&
+            (opcode === ClientProt.INV_BUTTON4 || this.tradeTracePackets.length > 0))) {
             const previous = this.tradeTracePackets.at(-1);
             if (previous) previous.end = this.out.pos;
             this.tradeTracePackets.push({ start: this.out.pos, opcode, actionId: this.tradeTraceActionId });
@@ -704,6 +706,14 @@ export class LiteClient {
         const packets = this.tradeTracePackets;
         this.tradeTracePackets = [];
         for (const p of packets) if (selected.has(p.opcode)) {
+            const offset = p.start + 1;
+            if (offerBoundaryEnabled() && p.opcode === ClientProt.INV_BUTTON4 &&
+                (p.end ?? this.out.pos) === offset + 6 && this.out.data[offset + 4] * 256 + this.out.data[offset + 5] === 3322) {
+                offerBoundaryTrace(this.loginUser, 'offer-flush-attempt', () => ({
+                    cycle: this.cycle.value, itemId: this.out.data[offset] * 256 + this.out.data[offset + 1],
+                    slot: this.out.data[offset + 2] * 256 + this.out.data[offset + 3],
+                }));
+            }
             tradeTrace(this.loginUser, 'lite', 'packet-flush-attempt', () => ({ actionId: p.actionId, opcode: p.opcode,
                 cycle: this.cycle.value, payload: Array.from(this.out.data.subarray(p.start + 1, p.end ?? this.out.pos)),
                 main: this.mainModalId, chat: this.chatModalId, side: this.sideModalId }));
