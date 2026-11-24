@@ -95,6 +95,18 @@ describe('BotStateCollector combat state', () => {
                 spotanimId:177,headicons:16,hp:null,combatTargetType:'player',combatTargetIndex:7});
         } finally {(ObjType as any).list = original;}
     });
+
+    test('exposes the UPDATE_PID world slot rather than local array index 2047', () => {
+        const client = createClient();
+        client.selfSlot = 0;
+        const collector = new BotStateCollector(client);
+        expect((collector as any).collectPlayerState(12, 100).worldSlot).toBe(0);
+        client.selfSlot = 37;
+        expect((collector as any).collectPlayerState(12, 100).worldSlot).toBe(37);
+        delete client.selfSlot;
+        expect((collector as any).collectPlayerState(12, 100).worldSlot).toBe(-1);
+    });
+
     test('uses the public tick for damage events and faceEntity for targeting', () => {
         const client = createClient();
         const collector = new BotStateCollector(client);
@@ -375,4 +387,27 @@ describe('BotStateCollector combat styles', () => {
             { index: 1, name: 'Style 1', type: 'Unknown', trainsSkills: [], damageType: 'Unknown' }
         ]);
     });
+});
+
+test('bank collector freezes a complete backing inventory per tick and retains it through modal closure', () => {
+    const client = createClient();
+    let open = true;
+    let items = [{ slot: 0, id: 995, name: 'Coins', count: 20 }];
+    Object.assign(client, { bankClientGeneration: 3, bankContentsKnown: true,
+        isBankOpen: () => open, getBankItems: () => items });
+    const collector = new BotStateCollector(client);
+    const collect = (tick: number, publish = true) => (collector as any).collectBankState(tick, publish);
+    const first = collect(10).observation;
+    items = [{ ...items[0], count: 30 }];
+    expect(collect(10).observation).toEqual(first);
+    expect(collect(11, false).observation).toEqual(first);
+    open = false;
+    const closed = collect(11);
+    expect(closed.items).toEqual([]);
+    expect(closed.observation).toMatchObject({ clientGeneration: 3, clientTick: 11, items: [{ count: 30 }] });
+    (client as any).bankContentsKnown = false;
+    items = [];
+    expect(collect(12).observation).toEqual(closed.observation);
+    (client as any).bankContentsKnown = true;
+    expect(collect(13).observation).toMatchObject({ clientTick: 13, items: [] });
 });

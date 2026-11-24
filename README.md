@@ -67,6 +67,12 @@ The exact generated API surface is documented in
 method-specific game effects; low-level `sdk.send*` methods confirm
 browser-client dispatch and do not prove the server applied the effect.
 
+`bot.mineRock` waits for both new ore and Mining XP. A stationary minimap-flag
+reset is only a possible rejection: the helper waits four fresh ticks for mining
+activity before retrying an idle attempt, with at most three clicks inside the
+original timeout. Once a swing, animation or XP gain is observed, it waits for
+completion instead of restarting mining. Explicit refusals still return failure.
+
 MCP `execute_code` snippets receive `bot` and `sdk` globals. Standalone files
 under `bots/<name>/` instead use `runScript(async ({ bot, sdk }) => { ... })`;
 see [`learnings/README.md`](learnings/README.md) for copyable examples and

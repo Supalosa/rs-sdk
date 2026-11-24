@@ -187,6 +187,29 @@ class World {
     lastCycleStart: number = 0;
 
     tickRate: number = World.TICKRATE; // speeds up when we're processing server shutdown
+    private automaticTicks = true;
+    private cycleTimer?: ReturnType<typeof setTimeout>;
+
+    pauseTicks(): void {
+        this.automaticTicks = false;
+        clearTimeout(this.cycleTimer);
+    }
+
+    resumeTicks(): void {
+        if (this.automaticTicks) return;
+        this.automaticTicks = true;
+        this.nextTick = Date.now();
+        this.cycleTimer = setTimeout(() => this.cycle(), 0);
+    }
+
+    /** Synchronous: callers must fence inputs before stepping and acknowledge output afterwards. */
+    stepTick(): number {
+        if (this.automaticTicks) throw new Error('Pause automatic ticks before stepping');
+        const before = this.currentTick;
+        this.cycle();
+        if (this.currentTick !== before + 1) throw new Error('World failed to advance exactly one tick');
+        return this.currentTick;
+    }
     currentTick: number = 0; // the current tick of the game world.
     nextTick: number = 0; // the next time the game world should tick.
     shutdownTick: number = -1;
@@ -590,7 +613,7 @@ class World {
 
             // ----
 
-            setTimeout(this.cycle.bind(this), Math.max(0, this.tickRate - (Date.now() - start) - drift));
+            if (this.automaticTicks) this.cycleTimer = setTimeout(this.cycle.bind(this), Math.max(0, this.tickRate - (Date.now() - start) - drift));
         } catch (err) {
             if (err instanceof Error) {
                 printError('eep eep cabbage! An unhandled error occurred during the cycle: ' + err.message);

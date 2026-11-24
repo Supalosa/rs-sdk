@@ -1,3 +1,7 @@
+import {inventoryInterfaceOptions} from '#/bot/interface-inventory-options.js';
+import type {InterfaceOption} from '../../../../sdk/types';
+import {selectClientTab} from '#/bot/tabs.js';
+import {claimBrowserControl,releaseBrowserControl} from '../bot/ClientHandoff';
 import { MarketSearchInput, RESULT_ICON, visibleSearchComponent, SEARCH_FIELD } from '#/client/MarketSearchInput.js';
 import { playWave, setWaveVolume } from '#3rdparty/audio.js';
 import { stopMidi, setMidiVolume, playMidi } from '#3rdparty/tinymidipcm.js';
@@ -1120,7 +1124,7 @@ export class Client extends GameShell {
      * Option 1 is usually "Talk-to", Option 2 might be "Pickpocket", etc.
      * Use getNearbyNpcs() to see available options for each NPC
      */
-    interactNpc(npcIndex: number, optionIndex: number): ClientActionResult {
+    interactNpc(npcIndex: number, optionIndex: number, route = true): ClientActionResult {
         if (!this.ingame || !this.out || !this.localPlayer) {
             return { success: false, reason: 'not_in_game' };
         }
@@ -1143,7 +1147,7 @@ export class Client extends GameShell {
         // Attempt the route, but always dispatch (see talkToNpc): apnpc ops are
         // legitimately interactable at range through walls.
         const size = n.type?.size ?? 1;
-        const routed = this.tryMove(this.localPlayer.routeX[0], this.localPlayer.routeZ[0], n.routeX[0], n.routeZ[0], false, size, size, 0, 0, 0, 2);
+        const routed = route ? this.tryMove(this.localPlayer.routeX[0], this.localPlayer.routeZ[0], n.routeX[0], n.routeZ[0], false, size, size, 0, 0, 0, 2) : false;
 
         // Send the appropriate OPNPC packet based on option index
         const opcodes = [
@@ -1789,9 +1793,10 @@ export class Client extends GameShell {
         return true;
     }
 
-    /**
-     * Check if bank interface is open
-     */
+    /** Full bank inventory received; cleared when transmission stops. */
+    bankContentsKnown = false;
+
+    /** Check if bank interface is open. */
     isBankOpen(): boolean {
         const BANK_MAIN_ID = 5292;
         const BANK_SIDE_INV_ID = 2006;
@@ -2835,8 +2840,8 @@ export class Client extends GameShell {
     /**
      * Get available interface options from the current viewport interface
      */
-    getInterfaceOptions(): Array<{ index: number; text: string; componentId: number }> {
-        const options: Array<{ index: number; text: string; componentId: number }> = [];
+    getInterfaceOptions(): InterfaceOption[] {
+        const options: InterfaceOption[] = [];
 
         if (this.mainModalId === -1) {
             return options;
@@ -2881,6 +2886,7 @@ export class Client extends GameShell {
         };
 
         scanComponent(this.mainModalId);
+        options.push(...inventoryInterfaceOptions(this.mainModalId,IfType.list,id=>ObjType.list(id).name,options.length));
         return options;
     }
 
@@ -2899,7 +2905,7 @@ export class Client extends GameShell {
         const interfaceOptions = this.getInterfaceOptions();
         if (optionIndex > 0 && optionIndex <= interfaceOptions.length) {
             const option = interfaceOptions[optionIndex - 1];
-            return this.clickComponent(option.componentId);
+            return option.operationIndex!==undefined ? this.clickInterfaceIop(option.componentId,option.operationIndex,option.slot??0) : this.clickComponent(option.componentId);
         }
         return false;
     }
@@ -2938,13 +2944,14 @@ export class Client extends GameShell {
      * Switch to a specific tab (0-13)
      */
     setTab(tabIndex: number): boolean {
-        if (!this.ingame || tabIndex < 0 || tabIndex > 13) {
-            return false;
-        }
-        if (this.sideIcon[tabIndex] === -1) {
-            return false;
-        }
-        this.activeIcon = tabIndex;
+        if (!this.ingame) return false;
+        const tabs = { sideIcon: this.sideIcon, activeIcon: this.activeIcon, tutFlashIcon: this.tutFlashIcon };
+        if (!selectClientTab(tabs, tabIndex, index => {
+            this.writePacketOpcode(ClientProt.TUT_CLICKSIDE);
+            this.out.p1(index);
+        })) return false;
+        this.activeIcon = tabs.activeIcon;
+        this.tutFlashIcon = tabs.tutFlashIcon;
         this.redrawSide = true;
         this.redrawIcons = true;
         return true;
@@ -4245,6 +4252,12 @@ export class Client extends GameShell {
                 return;
             }
 
+            if(ENABLE_BOT_SDK && !await claimBrowserControl(username)){
+                this.loginMes1='Waiting for headless client to disconnect.';
+                this.loginMes2='Please try logging in again.';
+                return;
+            }
+
             if (!reconnect) {
                 this.loginMes1 = '';
                 this.loginMes2 = 'Connecting to server...';
@@ -5004,13 +5017,15 @@ export class Client extends GameShell {
 
         // Hide Bot SDK overlay on logout
         if (this.botOverlay) {
-            this.botOverlay.hide();
+            this.botOverlay.destroy();
+            this.botOverlay=null;
         }
 
         if (this.stream) {
             this.stream.close();
         }
 
+        releaseBrowserControl();
         this.stream = null;
         this.ingame = false;
         this.loginscreen = 0;
@@ -8914,6 +8929,7 @@ export class Client extends GameShell {
 
             if (this.ptype === ServerProt.UPDATE_INV_STOP_TRANSMIT) {
                 const comId = this.in.g2();
+                if (comId === 5382) this.bankContentsKnown = false;
                 const inv: IfType = IfType.list[comId];
 
                 if (!inv.linkObjType || !inv.linkObjNumber) {
@@ -8957,6 +8973,7 @@ export class Client extends GameShell {
                     inv.linkObjNumber[i] = 0;
                 }
 
+                if (comId === 5382) this.bankContentsKnown = true;
                 this.ptype = -1;
                 return true;
             }

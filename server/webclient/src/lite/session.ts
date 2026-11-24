@@ -34,6 +34,9 @@ const KEEPALIVE_CYCLES = 50;
 const IDLE_CYCLES = 3000; // ~60s, i.e. ~200 missed server ticks
 
 export interface SessionOptions {
+    bankClientGeneration?: number;
+    /** Runtime-owned account authorization, checked immediately before game login. */
+    authorize?: () => void;
     /** Spread remote fleet starts over 5s by default; 0 disables the delay. */
     loginJitterMs?: number;
     host: string;
@@ -100,7 +103,10 @@ async function fetchServerRevision(origin: string): Promise<number | null> {
     }
 }
 
-export async function startSession(opts: SessionOptions): Promise<LiteSession> {
+export async function startSession(
+    opts: SessionOptions,
+    onStage?: (stage: 'revision check' | 'cache preparation' | 'login authorization' | 'game connection/login' | 'client initialization') => void
+): Promise<LiteSession> {
     if (opts.profanityFilter !== undefined) {
         WordFilter.enabled = opts.profanityFilter;
     }
@@ -110,16 +116,21 @@ export async function startSession(opts: SessionOptions): Promise<LiteSession> {
 
     // Fail with the fix, not a decode error or an opaque login response 6, when the server
     // has moved to another revision. Servers without /api/version skip the check.
+    onStage?.('revision check');
     const serverRevision = await fetchServerRevision(origin);
     if (serverRevision !== null && serverRevision !== CLIENT_VERSION) {
         throw new OutdatedClientError(origin, serverRevision);
     }
 
+    onStage?.('cache preparation');
     let { checksums } = await loadCache({ origin, cacheDir, members: opts.members, quiet: opts.quiet });
     let locIndex = await LocIndex.load({ origin, cacheDir, versionlistCrc: checksums[5], quiet: opts.quiet });
 
     const connect = async () => {
         await Bun.sleep(loginJitterMs(opts.loginJitterMs ?? Number(process.env.LITE_LOGIN_JITTER_MS ?? (secured ? 5000 : 0))));
+        onStage?.('login authorization');
+        opts.authorize?.();
+        onStage?.('game connection/login');
         return GameConnection.connect({
             host: opts.host,
             secured,
@@ -141,6 +152,7 @@ export async function startSession(opts: SessionOptions): Promise<LiteSession> {
             throw err;
         }
         const stale = checksums;
+        onStage?.('cache preparation');
         invalidateCache();
         ({ checksums } = await loadCache({ origin, cacheDir, members: opts.members, quiet: opts.quiet }));
         if (checksums.every((crc, i) => crc === stale[i])) {
@@ -153,7 +165,9 @@ export async function startSession(opts: SessionOptions): Promise<LiteSession> {
         connection = await connect();
     }
 
+    onStage?.('client initialization');
     const client = new LiteClient({
+        bankClientGeneration: opts.bankClientGeneration,
         connection,
         locIndex,
         username: opts.username,
@@ -161,6 +175,11 @@ export async function startSession(opts: SessionOptions): Promise<LiteSession> {
         maxMessageLength: opts.maxMessageLength
     });
 
+    return startSessionLoop(client, connection, opts);
+}
+
+/** Packet-loop seam for local transport fixtures; login remains in startSession. */
+export function startSessionLoop(client: LiteClient, connection: GameConnection, opts: Pick<SessionOptions, 'username' | 'onEnd'>): LiteSession {
     let running = true;
     let cycles = 0;
     let idle = 0;
@@ -178,13 +197,19 @@ export async function startSession(opts: SessionOptions): Promise<LiteSession> {
                 end = { reason: 'logged-out' };
                 break;
             }
-            if (!client.isInGame()) {
-                end = { reason: 'disconnected' };
-                break;
-            }
-
             try {
+                // A peer can send LOGOUT and close between polls. Drain its
+                // buffered final packet before classifying the closed socket.
                 await client.pumpPackets();
+                if (!running) break;
+                if (client.isLoggedOut()) {
+                    end = { reason: 'logged-out' };
+                    break;
+                }
+                if (!client.isInGame()) {
+                    end = { reason: 'disconnected' };
+                    break;
+                }
 
                 if (++cycles % KEEPALIVE_CYCLES === 0) {
                     client.writeOpcode(ClientProt.NO_TIMEOUT);
@@ -197,7 +222,9 @@ export async function startSession(opts: SessionOptions): Promise<LiteSession> {
                 }
                 // Individual bad packets are contained in handlePacket, so a throw
                 // that reaches here is the stream or the socket, not one handler.
-                end = client.isInGame() ? { reason: 'error', error: err } : { reason: 'disconnected' };
+                end = client.isLoggedOut()
+                    ? { reason: 'logged-out' }
+                    : client.isInGame() ? { reason: 'error', error: err } : { reason: 'disconnected' };
                 break;
             }
 

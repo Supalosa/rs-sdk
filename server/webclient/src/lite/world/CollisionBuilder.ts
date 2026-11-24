@@ -53,21 +53,15 @@ export function buildCollision(index: LocIndex, baseX: number, baseZ: number, ma
             for (let z = 1; z < BuildArea.SIZE - 1; z++) {
                 const worldX = baseX + x;
                 const worldZ = baseZ + z;
+                const bridged = (index.mapFlags(1, worldX, worldZ) & MapFlag.LinkBelow) !== 0;
+                const trueLevel = bridged ? level - 1 : level;
+                if (trueLevel < 0) continue;
 
                 for (const layer of [LocLayer.WALL, LocLayer.WALL_DECOR, LocLayer.GROUND, LocLayer.GROUND_DECOR]) {
-                    const value = readLoc(index, overlay, layer, level, worldX, worldZ);
+                    // Zone changes are indexed by the effective player level;
+                    // static map locations retain their raw file level.
+                    const value = readLoc(index, overlay, layer, level, trueLevel, worldX, worldZ);
                     if (!value) {
-                        continue;
-                    }
-
-                    // The collision map a loc lands on follows the same bridge
-                    // rule as ClientBuild.loadLocations: level 1 LinkBelow pushes
-                    // it down one.
-                    let trueLevel = level;
-                    if ((index.mapFlags(1, worldX, worldZ) & MapFlag.LinkBelow) !== 0) {
-                        trueLevel--;
-                    }
-                    if (trueLevel < 0) {
                         continue;
                     }
 
@@ -79,11 +73,23 @@ export function buildCollision(index: LocIndex, baseX: number, baseZ: number, ma
             }
         }
     }
+    // A bridge pushes raw levels 1..3 to effective levels 0..2, leaving no
+    // static counterpart for a server-added loc on effective level 3.
+    if (overlay) for (const [key, value] of overlay) {
+        const level = Math.floor(key / 0x10000000) & 3;
+        const worldX = Math.floor(key / 0x4000) & 0x3fff;
+        const worldZ = key & 0x3fff;
+        const x = worldX - baseX, z = worldZ - baseZ;
+        if (level === 3 && value > 0 && x > 0 && x < BuildArea.SIZE - 1 && z > 0 && z < BuildArea.SIZE - 1 &&
+            (index.mapFlags(1, worldX, worldZ) & MapFlag.LinkBelow) !== 0) {
+            applyLoc(maps[3]!, x, z, valueLocId(value), valueShape(value), valueAngle(value));
+        }
+    }
 }
 
-function readLoc(index: LocIndex, overlay: ReadonlyMap<number, number> | undefined, layer: LocLayer, level: number, worldX: number, worldZ: number): number {
+function readLoc(index: LocIndex, overlay: ReadonlyMap<number, number> | undefined, layer: LocLayer, level: number, effectiveLevel: number, worldX: number, worldZ: number): number {
     if (overlay) {
-        const key = ((layer & 0x3) * 0x40000000) + ((level & 0x3) * 0x10000000) + ((worldX & 0x3fff) * 0x4000) + (worldZ & 0x3fff);
+        const key = ((layer & 0x3) * 0x40000000) + ((effectiveLevel & 0x3) * 0x10000000) + ((worldX & 0x3fff) * 0x4000) + (worldZ & 0x3fff);
         const override = overlay.get(key);
         if (override !== undefined) {
             return override === -1 ? 0 : override;

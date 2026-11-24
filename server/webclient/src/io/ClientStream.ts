@@ -1,4 +1,10 @@
 export default class ClientStream {
+    /** Optional out-of-band frames used by an isolated lockstep test world. */
+    onControlFrame?: (message: string) => void;
+
+    sendControlFrame(message: string): void {
+        this.socket.send(message);
+    }
     private readonly socket: WebSocket;
     private readonly wsin: WebSocketReader;
     private readonly wsout: WebSocketWriter;
@@ -27,6 +33,11 @@ export default class ClientStream {
         this.wsin = new WebSocketReader(socket, 30000);
         this.wsout = new WebSocketWriter(socket, 5000);
         this.socket = socket;
+        const receive = socket.onmessage;
+        socket.onmessage = (event) => {
+            if (typeof event.data === 'string' && this.onControlFrame) this.onControlFrame(event.data);
+            else receive?.call(socket, event);
+        };
     }
 
     /**

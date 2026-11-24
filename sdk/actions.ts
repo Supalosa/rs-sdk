@@ -7,7 +7,7 @@ import { throwIfExecutionAborted, withExecutionDeadline } from './execution-cont
 import { GEActions } from './ge-actions';
 import type { GEOfferRequest, GEActionResult } from './ge-types';
 import { ActionHelpers, ALREADY_FIGHTING_REFUSALS, NO_RUNES_REFUSALS } from './actions-helpers';
-import { findDoorsAlongPath, isTileWalkable } from './pathfinding';
+import type { DoorInfo } from './pathfinding';
 import type {
     ActionResult,
     BotWorldState,
@@ -1137,31 +1137,35 @@ export class BotActions {
         // route can move 5+ tiles every iteration while never getting closer.
         let bestRemaining = distTo(pos);
 
-        // Try to open a blocking door. Returns true if door was opened.
+        // Recovery must use evidence from the current route, never a nearby
+        // unrelated door: some doors teleport the player through and close
+        // again, so opening the nearest one can pull us back into a room.
+        let pendingRouteDoors: DoorInfo[] = [];
+        const refreshPosition = () => {
+            const player = this.sdk.getState()?.player;
+            if (player) pos = { x: player.worldX, z: player.worldZ };
+        };
         const tryOpenDoor = async (): Promise<boolean> => {
             if (doorRetryCount >= MAX_DOOR_RETRIES) return false;
-            if (await this.helpers.tryOpenBlockingDoor()) {
-                doorRetryCount++;
-                await this.sdk.waitForTicks(1);
-                return true;
-            }
-            // Door open failed — block the nearest openable door in pathfinding
-            // so subsequent path queries route around it
+            refreshPosition();
+            const level = this.sdk.getState()?.player?.level ?? 0;
             const nearest = this.sdk.getNearbyLocs()
+                .filter(l => pendingRouteDoors.some(d => d.level === level && d.x === l.x && d.z === l.z))
                 .filter(l => l.optionsWithIndex.some(o => /^open$/i.test(o.text)))
-                .filter(l => l.distance <= 15)
-                .sort((a, b) => a.distance - b.distance)[0];
-            if (nearest) {
-                const level = this.sdk.getState()?.player?.level ?? 0;
-                const key = `${nearest.x},${nearest.z}`;
-                const fails = (doorFailCounts.get(key) ?? 0) + 1;
-                doorFailCounts.set(key, fails);
-                // Temporarily exclude after repeated reach failures. The
-                // session-owned evidence expires automatically.
-                if (fails >= 3 && !this.sdk.isDoorTemporarilyBlocked(level, nearest.x, nearest.z)) {
-                    this.sdk.blockDoorTemporarily(level, nearest.x, nearest.z);
-                    console.log(`[walkTo] Temporarily avoiding impassable door at (${nearest.x}, ${nearest.z}) — re-routing`);
-                }
+                .filter(l => this.helpers.distance(pos.x, pos.z, l.x, l.z) <= 2)
+                .filter(l => !this.sdk.isDoorTemporarilyBlocked(level, l.x, l.z))
+                .sort((a, b) => this.helpers.distance(pos.x, pos.z, a.x, a.z) - this.helpers.distance(pos.x, pos.z, b.x, b.z))[0];
+            if (!nearest) return false;
+            doorRetryCount++;
+            const result = await this.helpers.openDoorAt(nearest.x, nearest.z);
+            await this.sdk.waitForTicks(1);
+            refreshPosition();
+            if (result === 'opened') return true;
+            const key = `${nearest.x},${nearest.z}`;
+            const fails = (doorFailCounts.get(key) ?? 0) + 1;
+            doorFailCounts.set(key, fails);
+            if (result === 'locked' || fails >= 3) {
+                await this.sdk.sendBlockDoorTemporarily(level, nearest.x, nearest.z);
             }
             return false;
         };
@@ -1171,6 +1175,9 @@ export class BotActions {
             if (stale) return stale;
             const dead = diedEnRoute();
             if (dead) return dead;
+
+            refreshPosition();
+            if (distTo(pos) <= tolerance) return { success: true, message: 'Arrived' };
 
             // Try pathfinding (with one retry)
             let path = await this.sdk.sendFindPath(x, z, 500);
@@ -1184,7 +1191,7 @@ export class BotActions {
                     // tile instead of chasing a phantom pathfinder bug.
                     const level = this.sdk.getState()?.player?.level ?? 0;
                     const reason = path.error
-                        ?? (isTileWalkable(level, x, z) ? 'no waypoints' : 'destination tile is blocked');
+                        ?? (await this.sdk.sendIsTileWalkable(level, x, z) ? 'no waypoints' : 'destination tile is blocked');
                     console.error(`[walkTo] PATHFINDING FAILED: ${reason} - from (${pos.x}, ${pos.z}) to (${x}, ${z})`);
                     return { success: false, message: `No path to (${x}, ${z}) from (${pos.x}, ${pos.z}): ${reason}` };
                 }
@@ -1205,7 +1212,7 @@ export class BotActions {
                     const short = Math.round(this.helpers.distance(endWp.x, endWp.z, x, z));
                     return {
                         success: false,
-                        message: `Path to (${x}, ${z}) stops ${short} tiles short at (${endWp.x}, ${endWp.z}) - the rest is unroutable from here (locked door or separate room?)`
+                        message: `Computed path to (${x}, ${z}) ends ${short} tiles short at (${endWp.x}, ${endWp.z}); player actually at (${pos.x}, ${pos.z}). No route beyond that computed endpoint (locked door or separate room?)`
                     };
                 }
                 lastPartialEnd = null;
@@ -1214,13 +1221,16 @@ export class BotActions {
             lastPartialEnd = partial ? { x: endWp.x, z: endWp.z } : null;
 
             // Identify doors the path crosses through so we can open them proactively
-            const requiredDoors = findDoorsAlongPath(path.waypoints);
+            const route = await this.sdk.sendPlanDoorRoute(path.waypoints, pos);
+            path.waypoints = route.waypoints;
+            const requiredDoors = route.doors;
+            pendingRouteDoors = requiredDoors;
             const requiredDoorKeys = new Set(requiredDoors.map(d => `${d.x},${d.z}`));
 
             // Walk waypoints
             let consecutiveStuck = 0;
 
-            for (const wp of path.waypoints) {
+            waypoints: for (const wp of path.waypoints) {
                 const stale = await ensureFreshState();
                 if (stale) return stale;
                 // Proactively open doors the path requires — only when we're close enough to see them
@@ -1238,20 +1248,28 @@ export class BotActions {
                             // Find which required door is closest to this waypoint
                             for (const door of requiredDoors) {
                                 const dk = `${door.x},${door.z}`;
-                                if (this.sdk.isDoorTemporarilyBlocked(door.level, door.x, door.z)) break;
+                                if (!requiredDoorKeys.has(dk) || this.sdk.isDoorTemporarilyBlocked(door.level, door.x, door.z)) continue;
                                 const doorDist = Math.abs(door.x - wp.x) + Math.abs(door.z - wp.z);
                                 if (doorDist <= 1) {
                                     const result = await this.helpers.openDoorAt(door.x, door.z);
                                     if (result === 'opened' || result === 'already_open') {
                                         requiredDoorKeys.delete(dk);
-                                        await this.sdk.waitForTicks(1);
+                                        pendingRouteDoors = requiredDoors.filter(d => requiredDoorKeys.has(`${d.x},${d.z}`));
+                                        if (result === 'opened') {
+                                            // Door scripts can move us across the doorway. Old
+                                            // waypoints may now be behind us: discard them.
+                                            await this.sdk.waitForTicks(1);
+                                            refreshPosition();
+                                            break waypoints;
+                                        }
                                     } else if (result === 'locked') {
                                         // Definitely locked right now — avoid it for
                                         // this session's next path queries.
-                                        this.sdk.blockDoorTemporarily(door.level, door.x, door.z);
+                                        await this.sdk.sendBlockDoorTemporarily(door.level, door.x, door.z);
                                         requiredDoorKeys.delete(dk);
                                         console.log(`[walkTo] Temporarily avoiding locked door at (${door.x}, ${door.z}) — re-routing`);
-                                        break; // Re-query path on next iteration
+                                        refreshPosition();
+                                        break waypoints; // Re-query instead of walking the stale route
                                     } else {
                                         // A door present in static collision can be absent from the
                                         // current Lite map. That is not a failed open attempt: continue
@@ -1265,13 +1283,14 @@ export class BotActions {
                                         const fails = (doorFailCounts.get(dk) ?? 0) + 1;
                                         doorFailCounts.set(dk, fails);
                                         if (fails >= 3) {
-                                            this.sdk.blockDoorTemporarily(door.level, door.x, door.z);
+                                            await this.sdk.sendBlockDoorTemporarily(door.level, door.x, door.z);
                                             requiredDoorKeys.delete(dk);
                                             console.log(`[walkTo] Temporarily avoiding impassable door at (${door.x}, ${door.z}) after ${fails} failures — re-routing`);
                                         } else {
                                             console.log(`[walkTo] Door at (${door.x}, ${door.z}) ${result} (attempt ${fails}/3) — retrying`);
                                         }
-                                        break; // Re-query path on next iteration
+                                        refreshPosition();
+                                        break waypoints; // Re-query instead of walking the stale route
                                     }
                                     break;
                                 }
@@ -1306,13 +1325,15 @@ export class BotActions {
             // Progress = closing on the destination. bestRemaining is a
             // monotone minimum, so an oscillating route (walk out, walk back)
             // cannot keep resetting the counter the way distance-moved did.
+            refreshPosition();
+            if (distTo(pos) <= tolerance) return { success: true, message: 'Arrived' };
             const remaining = distTo(pos);
             if (remaining < bestRemaining) {
                 bestRemaining = remaining;
                 poorProgressCount = 0;
             } else if (++poorProgressCount >= 3) {
                 if (!await tryOpenDoor()) {
-                    return { success: false, message: `Stuck at (${pos.x}, ${pos.z})` };
+                    return { success: false, reason: 'no_route_progress', message: `Route made no progress toward (${x}, ${z}); player at (${pos.x}, ${pos.z})` };
                 }
                 poorProgressCount = 0;
             }
@@ -4059,27 +4080,51 @@ export class BotActions {
             return state.inventory.find(item => matchesOre(item) && (amounts.get(item.id) ?? 0) > (before.get(item.id) ?? 0));
         };
         const miningXp = (state: BotWorldState) => state.skills.find(skill => /^mining$/i.test(skill.name))?.experience ?? xp;
-        const baseline = this.helpers.getMessageTick();
-        const rejection = this.helpers.opRejectionCursor();
+        const deadline = Date.now() + timeout;
         const refusals = ['need a mining level', 'need a pickaxe', 'do not have a pickaxe', "can't reach", 'cannot reach', 'no ore'];
-        const interaction = await this.sdk.sendInteractLoc(current.x, current.z, current.id, mine.opIndex);
-        if (!interaction.success) return fail(interaction.reason === 'cant_reach' ? 'cant_reach' : 'rejected', interaction.message);
-        try {
-            const final = await this.sdk.waitForCondition(state =>
-                (Boolean(gainedOre(state)) && miningXp(state) > xp) ||
-                this.helpers.wasOpRejectedSince(rejection, state) ||
-                Boolean(this.helpers.findRefusal(baseline, refusals)), timeout);
-            const ore = gainedOre(final);
-            const xpGained = miningXp(final) - xp;
-            if (ore && xpGained > 0) {
-                const count = final.inventory.filter(item => item.id === ore.id).reduce((sum, item) => sum + item.count, 0);
-                return { success: true, message: `Mined ${ore.name}`, ore, oresMined: count - (before.get(ore.id) ?? 0), xpGained };
-            }
-            return fail('rejected', this.helpers.findRefusal(baseline, refusals) ?? 'Mining operation was rejected');
-        } catch {
+        // UNSET_MAP_FLAG is only a rejection hint: live mining can emit it
+        // before its first swing. Allow four fresh ticks for activity, and never
+        // re-click after a swing/animation or XP gain (it can reset mining).
+        for (let attempt = 0; attempt < 3; attempt++) {
             throwIfExecutionAborted();
-            return fail('timeout', `No ${oreName ?? 'ore'} gained from ${rock.name} within ${timeout}ms`);
+            const baseline = this.helpers.getMessageTick();
+            const rejection = this.helpers.opRejectionCursor();
+            let rejectedAt: number | undefined;
+            let started = false;
+            const target = this.helpers.refindLocation(rock);
+            const option = target?.optionsWithIndex.find(option => /^mine$/i.test(option.text));
+            if (!target || !option) return fail('loc_not_found', 'Mining rock is no longer available');
+            const interaction = await this.sdk.sendInteractLoc(target.x, target.z, target.id, option.opIndex);
+            if (!interaction.success) return fail(interaction.reason === 'cant_reach' ? 'cant_reach' : 'rejected', interaction.message);
+            try {
+                const final = await this.sdk.waitForCondition(state => {
+                    if (gainedOre(state) && miningXp(state) > xp) return true;
+                    if (this.helpers.findRefusal(baseline, refusals)) return true;
+                    started ||= miningXp(state) > xp ||
+                        (state.player?.animId !== undefined && state.player.animId !== -1) ||
+                        state.gameMessages.some(message => this.helpers.isMessageAfter(message, baseline) &&
+                            /you swing your pick/i.test(message.text));
+                    if (!started && this.helpers.wasOpRejectedSince(rejection, state)) {
+                        rejectedAt ??= state.tick;
+                        return state.tick - rejectedAt >= 4;
+                    }
+                    return false;
+                }, Math.max(1, deadline - Date.now()));
+                const ore = gainedOre(final);
+                const xpGained = miningXp(final) - xp;
+                if (ore && xpGained > 0) {
+                    const count = final.inventory.filter(item => item.id === ore.id).reduce((sum, item) => sum + item.count, 0);
+                    return { success: true, message: `Mined ${ore.name}`, ore, oresMined: count - (before.get(ore.id) ?? 0), xpGained };
+                }
+                const refusal = this.helpers.findRefusal(baseline, refusals);
+                if (refusal) return fail('rejected', refusal);
+                // Only the debounced, idle rejection hint reaches this retry.
+            } catch {
+                throwIfExecutionAborted();
+                return fail('timeout', `No ${oreName ?? 'ore'} gained from ${rock.name} within ${timeout}ms`);
+            }
         }
+        return fail('rejected', 'Mining operation was rejected after 3 attempts');
     }
 
     /**

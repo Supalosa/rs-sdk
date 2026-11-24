@@ -127,6 +127,7 @@ export class GatewayConnection {
     }
 
     disconnect(): void {
+        this.preventReconnect = true;
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;

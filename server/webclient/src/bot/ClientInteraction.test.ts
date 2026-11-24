@@ -22,6 +22,7 @@ mock.module('#/client/MobileKeyboard.js', () => ({
 }));
 
 (globalThis as any).window = {
+    addEventListener() {},
     audioContext: {
         currentTime: 0,
         destination: {},
@@ -837,4 +838,28 @@ test('action bridge preserves stationary attack routing and reports that no rout
  const result=new ActionExecutor(client).execute({type:'interactPlayer',playerIndex:5,optionIndex:2,approach:false,reason:'stationary ranged attack'});
  expect(result).toMatchObject({success:true,phase:'dispatch',data:{routed:false}});
  expect(opcodes).toEqual([ClientProt.OPPLAYER2]);expect(payload).toEqual([5]);
+});
+
+
+describe('NPC interaction routing policy', () => {
+    for (const route of [undefined, false]) {
+        test(`route=${route} preserves the ordinary OPNPC packet`, () => {
+            const opcodes: number[] = [];
+            const payload: number[] = [];
+            let moves = 0;
+            const client = {
+                ingame: true,
+                out: { p2: (value: number) => payload.push(value) },
+                localPlayer: { routeX: [12], routeZ: [8] },
+                npc: { 42: { routeX: [14], routeZ: [10], type: { size: 3 } } },
+                tryMove: () => { moves++; return true; },
+                writePacketOpcode: (opcode: number) => opcodes.push(opcode)
+            };
+            const result = Client.prototype.interactNpc.call(client as never, 42, 2, route);
+            expect(result).toEqual({ success: true, routed: route !== false });
+            expect(moves).toBe(route === false ? 0 : 1);
+            expect(opcodes).toEqual([ClientProt.OPNPC2]);
+            expect(payload).toEqual([42]);
+        });
+    }
 });

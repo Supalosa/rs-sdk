@@ -276,7 +276,19 @@ export interface TradeState {
     partnerAccepted: boolean;
 }
 
+/** A bank view captured once at a client tick boundary, retained when the bank closes. */
+export interface BankTickObservation {
+    clientGeneration: number;
+    clientTick: number;
+    /** Diagnostic capture time; never an ordering key. */
+    observedAt: string;
+    items: BankItem[];
+}
+
 export interface BankState {
+    observation?: BankTickObservation;
+    /** Contents are backed by an active full inventory transmission. */
+    contentsKnown?: boolean;
     isOpen: boolean;
     items: BankItem[];
     /**
@@ -304,6 +316,11 @@ export interface PlayerCombatState {
 }
 
 export interface PlayerState {
+    /** Server world slot from UPDATE_PID; -1 before receipt. Absent on older clients.
+     * NPC faceEntity/targetIndex refers to us when equal to 32768 + worldSlot.
+     * This is NOT the client's reserved local-player array index (2047).
+     */
+    worldSlot?: number;
     name: string;
     combatLevel: number;
     /** Current hitpoints level (boosted/drained) */
@@ -354,6 +371,26 @@ export interface CombatStyleState {
     known: boolean;
 }
 
+/** A cast button from the magic side tab (teleports, self-cast spells). */
+export interface MagicSpellButton {
+    /** Button label as rendered by the client, e.g. 'Cast Trollheim teleport'. */
+    label: string;
+    /** Global component id to pass to sendClickComponent after sendSetTab(tabIndex). */
+    componentId: number;
+}
+
+/** Magic side tab layout: which side tab it is and its cast-button component ids. */
+export interface MagicTabState {
+    /** Interface id of the magic side tab the server installed (-1 when unknown). */
+    tabInterfaceId: number;
+    /** Side tab index to pass to sendSetTab (-1 when unknown). */
+    tabIndex: number;
+    /** Cast buttons found in the magic tab (graphic buttons with a Cast option). */
+    buttons: MagicSpellButton[];
+    /** False when the magic tab could not be identified from the loaded interfaces. */
+    known: boolean;
+}
+
 /** Combat event for tracking damage, kills, etc. */
 export interface CombatEvent {
     /** Game tick when event occurred */
@@ -375,6 +412,7 @@ export interface CombatEvent {
 }
 
 export interface DialogState {
+    countInputOpen?: boolean;
     isOpen: boolean;
     options: Array<{ index: number; text: string; componentId?: number; buttonType?: number }>;
     isWaiting: boolean;
@@ -385,7 +423,7 @@ export interface DialogState {
 export interface InterfaceState {
     isOpen: boolean;
     interfaceId: number;
-    options: Array<{ index: number; text: string }>;
+    options: import('../../../../sdk/types').InterfaceOption[];
 }
 
 export interface PrayerState {
@@ -418,6 +456,10 @@ export interface OpFeedbackState {
 }
 
 export interface BotState {
+    /** Stable for this game-client connection; increments before a replacement starts. */
+    clientGeneration?: number;
+    hint?: import('../../../../sdk/types').BotWorldState['hint'];
+    tabs?: import('../../../../sdk/types').BotWorldState['tabs'];
     tick: number;
     /** Version of nearby-player combat-target telemetry emitted by the Lite client. */
     combatTargetTelemetryVersion: number;
@@ -427,7 +469,10 @@ export interface BotState {
     skills: SkillState[];
     inventory: InventoryItem[];
     equipment: InventoryItem[];
+    quests?: import('../../../../sdk/types').QuestState;
     combatStyle: CombatStyleState;
+    /** Magic side tab layout (cast buttons + component ids); absent on older clients. */
+    magicTab?: MagicTabState;
     nearbyNpcs: NearbyNpc[];
     nearbyPlayers: NearbyPlayer[];
     nearbyLocs: NearbyLoc[];
@@ -493,10 +538,11 @@ export interface PacketLogEntry {
 // SDK action types - pure primitives that map to game protocol
 // Domain logic lives in BotActions (sdk/actions.ts), not here
 export type BotAction =
+    | { type: 'testClockYield'; reason: string }
     | { type: 'none'; reason: string }
     | { type: 'wait'; reason: string; ticks?: number }
     | { type: 'talkToNpc'; npcIndex: number; reason: string }
-    | { type: 'interactNpc'; npcIndex: number; optionIndex: number; reason: string }
+    | { type: 'interactNpc'; npcIndex: number; optionIndex: number; route?: boolean; reason: string }
     | { type: 'interactPlayer'; playerIndex: number; optionIndex: number; approach?: boolean; reason: string }
     | { type: 'clickDialogOption'; optionIndex: number; reason: string; guard?: { pageId: string; componentId: number } }
     // clickComponent: IF_BUTTON packet - for simple buttons, spellcasting, etc.

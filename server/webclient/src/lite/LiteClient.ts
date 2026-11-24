@@ -52,6 +52,8 @@ import { buildCollision } from './world/CollisionBuilder.js';
 import { handlePacket } from './protocol/incoming.js';
 import { findPathToTile, tryMoveTo } from './movement.js';
 import * as A from './actions.js';
+import { tradeTrace, tradeTraceEnabled } from '../../../../sdk/trade-diagnostics.js';
+import { offerBoundaryEnabled, offerBoundaryTrace } from '../../../../sdk/offer-boundary-trace.js';
 
 export const MAX_PLAYER_COUNT = 2048;
 export const LOCAL_PLAYER_INDEX = 2047;
@@ -76,6 +78,7 @@ export interface ClientActionResult {
 }
 
 export interface LiteClientOptions {
+    bankClientGeneration?: number;
     connection: GameConnection;
     locIndex: LocIndex;
     username: string;
@@ -84,6 +87,7 @@ export interface LiteClientOptions {
 }
 
 export class LiteClient {
+    readonly bankClientGeneration: number;
     // ---- fields the bot bridge reads via `(client as any)` -------------------
     // Names and types match Client.ts exactly. Do not rename without updating
     // StateCollector.ts - tsc will not catch it, the accesses are `as any`.
@@ -113,6 +117,12 @@ export class LiteClient {
     mainOverlayId = -1;
     sideIcon: number[] = [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1];
     activeIcon = 0;
+    tutFlashIcon = -1;
+    hintType = 0;
+    hintNpc = 0;
+    hintPlayer = 0;
+    hintTileX = 0;
+    hintTileZ = 0;
     minusedlevel = 0;
     mapBuildBaseX = 0;
     mapBuildBaseZ = 0;
@@ -138,7 +148,6 @@ export class LiteClient {
     playerOp: (string | null)[] = [null, null, null, null, null];
     playerOpPriority: boolean[] = [false, false, false, false, false];
     tutComId = -1;
-    hintType = 0;
     dialogHistory: Array<{ text: string[]; tick: number; interfaceId: number }> = [];
     lastCapturedDialogId = -1;
     designGender = true;
@@ -226,6 +235,7 @@ export class LiteClient {
     })();
 
     constructor(opts: LiteClientOptions) {
+        this.bankClientGeneration = opts.bankClientGeneration ?? 0;
         this.conn = opts.connection;
         this.locIndex = opts.locIndex;
         this.loginUser = opts.username;
@@ -253,7 +263,16 @@ export class LiteClient {
      * browser shell there is no redraw to interleave with, so we just loop until
      * the socket is dry.
      */
-    async pumpPackets(): Promise<void> {
+    private packetPump: Promise<void> = Promise.resolve();
+    private pendingGameTicks = 0;
+
+    pumpPackets(): Promise<void> {
+        const task = this.packetPump.then(() => this.drainPackets());
+        this.packetPump = task.catch(() => {});
+        return task;
+    }
+
+    private async drainPackets(): Promise<void> {
         let guard = 0;
         while (!this.loggedOut && (await handlePacket(this))) {
             if (++guard > 5000) {
@@ -261,6 +280,9 @@ export class LiteClient {
             }
         }
         this.snapEntities();
+        const ticks = this.pendingGameTicks;
+        this.pendingGameTicks = 0;
+        for (let tick = 0; tick < ticks; tick++) this.onGameTickCallback?.();
     }
 
     /**
@@ -434,7 +456,8 @@ export class LiteClient {
         }
         this.lastTickTime = now;
 
-        this.onGameTickCallback?.();
+        // Inventory and interface updates can follow PLAYER_INFO in the same drain.
+        this.pendingGameTicks++;
     }
 
     isInGame(): boolean {
@@ -662,7 +685,15 @@ export class LiteClient {
     // ------------------------------------------------------ outgoing plumbing
 
     /** Queue an opcode with ISAAC encoding, matching Client.writePacketOpcode. */
+    tradeTraceActionId: string | null = null;
+    private tradeTracePackets: { start: number; end?: number; opcode: number; actionId: string | null }[] = [];
     writeOpcode(opcode: ClientProt): void {
+        if (tradeTraceEnabled(this.loginUser) || (offerBoundaryEnabled() &&
+            (opcode === ClientProt.OPPLAYER4 || opcode === ClientProt.INV_BUTTON4 || this.tradeTracePackets.length > 0))) {
+            const previous = this.tradeTracePackets.at(-1);
+            if (previous) previous.end = this.out.pos;
+            this.tradeTracePackets.push({ start: this.out.pos, opcode, actionId: this.tradeTraceActionId });
+        }
         this.conn.out.p1Enc(opcode);
     }
 
@@ -671,7 +702,33 @@ export class LiteClient {
     }
 
     flush(): void {
+        const selected = new Set<number>([ClientProt.OPPLAYER4, ClientProt.INV_BUTTON1, ClientProt.INV_BUTTON2,
+            ClientProt.INV_BUTTON3, ClientProt.INV_BUTTON4, ClientProt.INV_BUTTON5, ClientProt.IF_BUTTON,
+            ClientProt.OPLOC1, ClientProt.CLOSE_MODAL, ClientProt.RESUME_PAUSEBUTTON]);
+        const packets = this.tradeTracePackets;
+        this.tradeTracePackets = [];
+        for (const p of packets) if (selected.has(p.opcode)) {
+            const offset = p.start + 1;
+            if (offerBoundaryEnabled() && p.opcode === ClientProt.OPPLAYER4 && (p.end ?? this.out.pos) === offset + 2) {
+                offerBoundaryTrace(this.loginUser, 'trade-request-flush-attempt', () => ({
+                    cycle: this.cycle.value, peerIndex: this.out.data[offset] * 256 + this.out.data[offset + 1],
+                }));
+            }
+            if (offerBoundaryEnabled() && p.opcode === ClientProt.INV_BUTTON4 &&
+                (p.end ?? this.out.pos) === offset + 6 && this.out.data[offset + 4] * 256 + this.out.data[offset + 5] === 3322) {
+                offerBoundaryTrace(this.loginUser, 'offer-flush-attempt', () => ({
+                    cycle: this.cycle.value, itemId: this.out.data[offset] * 256 + this.out.data[offset + 1],
+                    slot: this.out.data[offset + 2] * 256 + this.out.data[offset + 3],
+                }));
+            }
+            tradeTrace(this.loginUser, 'lite', 'packet-flush-attempt', () => ({ actionId: p.actionId, opcode: p.opcode,
+                cycle: this.cycle.value, payload: Array.from(this.out.data.subarray(p.start + 1, p.end ?? this.out.pos)),
+                main: this.mainModalId, chat: this.chatModalId, side: this.sideModalId }));
+        }
+        const bytes = this.out.pos;
         this.conn.flush();
+        if (packets.some(p => selected.has(p.opcode))) tradeTrace(this.loginUser, 'lite', 'flush-returned', () => ({
+            bytes, remainingBytes: this.out.pos, cycle: this.cycle.value }));
     }
 
     // ----------------------------------------------------------- type lookups
@@ -731,8 +788,8 @@ export class LiteClient {
     talkToNpc(npcIndex: number): ClientActionResult {
         return A.talkToNpc(this, npcIndex);
     }
-    interactNpc(npcIndex: number, optionIndex: number): ClientActionResult {
-        return A.interactNpc(this, npcIndex, optionIndex);
+    interactNpc(npcIndex: number, optionIndex: number, route = true): ClientActionResult {
+        return A.interactNpc(this, npcIndex, optionIndex, route);
     }
 
     /** Exact raw-table lookup for latency-critical, policy-gated hooks. */
@@ -824,7 +881,7 @@ export class LiteClient {
     getDialogText(): string[] {
         return A.getDialogText(this);
     }
-    getInterfaceOptions(): Array<{ index: number; text: string; componentId: number }> {
+    getInterfaceOptions(): import('../../../../sdk/types').InterfaceOption[] {
         return A.getInterfaceOptions(this);
     }
     debugDialogComponents(): Array<{ id: number; type: number; buttonType: number; option: string; text: string }> {
@@ -854,6 +911,9 @@ export class LiteClient {
     closeShop(): boolean {
         return A.closeShop(this);
     }
+    /** True after a full bank inventory packet, until transmission stops. */
+    bankContentsKnown = false;
+
     isBankOpen(): boolean {
         return A.isBankOpen(this);
     }
@@ -933,10 +993,10 @@ export class LiteClient {
             }
         }
 
-        const interfaceOptions: Array<{ index: number; text: string; componentId: number }> = [];
+        const interfaceOptions: import('../../../../sdk/types').InterfaceOption[] = [];
         if (this.isViewportInterfaceOpen()) {
             for (const opt of this.getInterfaceOptions()) {
-                interfaceOptions.push({ index: opt.index, text: opt.text, componentId: opt.componentId });
+                interfaceOptions.push({ ...opt });
             }
         }
 
@@ -944,6 +1004,7 @@ export class LiteClient {
             ...baseState,
             dialog: {
                 ...baseState.dialog,
+                countInputOpen: this.dialogInputOpen,
                 isOpen: this.isDialogOpen(),
                 options: dialogOptions,
                 isWaiting: this.isWaitingForDialog(),

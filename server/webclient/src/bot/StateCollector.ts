@@ -1,3 +1,6 @@
+import { BankObservationTracker } from './BankObservation.js';
+import {collectHintArrow} from './hint-arrow';
+import {collectTabs} from './tabs';
 // StateCollector.ts - Collects game state from the client
 // Extracts all relevant game data for bot decision-making
 
@@ -6,6 +9,7 @@ import type ClientNpc from '#/dash3d/ClientNpc.js';
 import type ClientPlayer from '#/dash3d/ClientPlayer.js';
 import type ClientObj from '#/dash3d/ClientObj.js';
 import IfType from '#/config/IfType.js';
+import { collectQuestState } from './quest-state';
 import { collectGEState } from './ge-state.js';
 import { getDialogPageId } from './dialog-page.js';
 import { specialAttackActive, specialEnergyPercent } from './SpecialAttack.js';
@@ -56,6 +60,8 @@ import {
     type CombatStyleState,
     type CombatStyleOption,
     type CombatEvent,
+    type MagicTabState,
+    type MagicSpellButton,
     type DialogState,
     type InterfaceState,
     type PrayerState,
@@ -127,6 +133,8 @@ export class BotStateCollector implements ScanProvider {
     private readonly reachProbe: ReachProbe;
     private reachabilityEnabled = true;
 
+    private bankObservations = new BankObservationTracker();
+
     constructor(client: Client) {
         this.client = client;
         this.reachProbe = new ReachProbe(client as any);
@@ -166,12 +174,14 @@ export class BotStateCollector implements ScanProvider {
         return {
             tick: currentTick,
             combatTargetTelemetryVersion: 2,
+            clientGeneration: (this.client as any).bankClientGeneration ?? 0,
             revision: this.publicationRevision,
             player: this.collectPlayerState(currentTick, clientCycle),
             skills: this.collectSkills(),
             inventory: this.collectInventory(INVENTORY_INTERFACE_ID),
             equipment: this.collectInventory(EQUIPMENT_INTERFACE_ID),
             combatStyle: this.collectCombatStyle(),
+            magicTab: this.collectMagicTab(),
             nearbyNpcs: this.collectNearbyNpcs(clientCycle),
             nearbyPlayers: this.collectNearbyPlayers(clientCycle),
             nearbyLocs: this.collectNearbyLocs(),
@@ -180,12 +190,15 @@ export class BotStateCollector implements ScanProvider {
             recentDialogs: this.collectRecentDialogs(currentTick, publish),
             menuActions: this.collectMenuActions(),
             shop: this.collectShopState(),
-            bank: this.collectBankState(),
+            bank: this.collectBankState(currentTick, publish),
             trade: this.collectTradeState(),
             ge: collectGEState(IfType.list, c.mainModalId ?? -1),
             inGame: c.ingame || false,
             combatEvents: [...this.combatEvents], // Return copy of events
-            dialog: this.collectDialogState(),
+            dialog: { ...this.collectDialogState(), countInputOpen: c.isChatBackInputOpen?.() ?? false },
+            tabs: collectTabs(c,IfType.list),
+            hint: collectHintArrow(c),
+            quests: collectQuestState(IfType.list, c.var ?? [], c.mainModalId ?? -1),
             interface: this.collectInterfaceState(),
             modalOpen: (c.mainModalId ?? -1) !== -1,
             modalInterface: c.mainModalId ?? -1,
@@ -383,10 +396,10 @@ export class BotStateCollector implements ScanProvider {
 
         // Get interface options using client's method if available
         // Include componentId so SDK can click directly without lookup
-        let options: Array<{ index: number; text: string; componentId: number }> = [];
+        let options: import('../../../../sdk/types').InterfaceOption[] = [];
         if (isOpen && typeof this.client.getInterfaceOptions === 'function') {
             const rawOptions = this.client.getInterfaceOptions();
-            options = rawOptions.map((opt: any) => ({ index: opt.index, text: opt.text, componentId: opt.componentId }));
+            options = rawOptions.map((opt: any) => ({ ...opt }));
         }
 
         return { isOpen, interfaceId, options };
@@ -611,6 +624,7 @@ export class BotStateCollector implements ScanProvider {
         }
 
         return {
+            worldSlot: Number.isInteger(c.selfSlot) && c.selfSlot >= 0 ? c.selfSlot : -1,
             name: player.name || 'Unknown',
             combatLevel: player.combatLevel || 0,
             hp,
@@ -844,6 +858,64 @@ export class BotStateCollector implements ScanProvider {
         } catch {
             return defaultState;
         }
+    }
+
+    /**
+     * Locate the magic side tab and list its cast buttons (teleports and other
+     * self-cast spells) with the global component ids the client sends in
+     * IF_BUTTON. The tab is recognised by content, not by position: any side
+     * tab whose tree contains graphic buttons labelled "Cast ..." is the magic
+     * tab, which keeps this build-independent.
+     */
+    private collectMagicTab(): MagicTabState {
+        const c = this.client as any;
+
+        const defaultState: MagicTabState = {
+            tabInterfaceId: -1,
+            tabIndex: -1,
+            buttons: [],
+            known: false
+        };
+
+        try {
+            const sideIcon: number[] = c.sideIcon ?? [];
+            for (let tabIndex = 0; tabIndex < sideIcon.length; tabIndex++) {
+                const interfaceId = sideIcon[tabIndex];
+                if (typeof interfaceId !== 'number' || interfaceId < 0) continue;
+
+                const root = IfType.list[interfaceId] as any;
+                if (!root) continue;
+
+                const buttons: MagicSpellButton[] = [];
+                const visit = (comId: number, depth: number): void => {
+                    const com = IfType.list[comId] as any;
+                    if (!com || depth > 3) return;
+                    // Graphic buttons (type 5) carry their "Cast ..." label in buttonText.
+                    if (com.type === 5 && typeof com.buttonText === 'string' && /^cast\b/i.test(com.buttonText.trim())) {
+                        buttons.push({ label: com.buttonText, componentId: com.id });
+                    }
+                    if (com.children) {
+                        for (const childId of com.children) visit(childId, depth + 1);
+                    }
+                };
+                if (root.children) {
+                    for (const childId of root.children) visit(childId, 1);
+                }
+
+                if (buttons.length > 0) {
+                    return {
+                        tabInterfaceId: interfaceId,
+                        tabIndex,
+                        buttons,
+                        known: true
+                    };
+                }
+            }
+        } catch {
+            return defaultState;
+        }
+
+        return defaultState;
     }
 
     private collectInventory(interfaceId: number): InventoryItem[] {
@@ -1460,9 +1532,10 @@ export class BotStateCollector implements ScanProvider {
         return shopState;
     }
 
-    private collectBankState(): BankState {
+    private collectBankState(currentTick: number, publish: boolean): BankState {
         const c = this.client as any;
         const bankState: BankState = {
+            contentsKnown: c.bankContentsKnown === true,
             isOpen: false,
             items: [],
             // varp 115 = %bankcert (varp.pack), the note/item withdrawal toggle.
@@ -1487,6 +1560,12 @@ export class BotStateCollector implements ScanProvider {
             }
         }
 
+        // The backing bank inventory remains meaningful after the modal closes.
+        // STOP_TRANSMIT invalidates it explicitly; a closed UI alone does not.
+        const completeBank = bankState.contentsKnown === true && typeof c.getBankItems === 'function'
+            ? { ...bankState, items: c.getBankItems() }
+            : bankState;
+        bankState.observation = this.bankObservations.observe(currentTick, c.bankClientGeneration ?? 0, completeBank, publish);
         return bankState;
     }
 

@@ -1,3 +1,4 @@
+import {readHintArrow} from '#/bot/hint-arrow.js';
 // Inbound packet framing + dispatch.
 //
 // Ported from Client.ts tcpIn(). One deliberate divergence: the browser client
@@ -31,6 +32,8 @@ import { LiteClient, MAX_PLAYER_COUNT } from '../LiteClient.js';
 import { buildCollision } from '../world/CollisionBuilder.js';
 import { getNpcPos, getPlayerPos, screenNameOf } from './entities.js';
 import { zonePacket } from './zone.js';
+import { tradeTrace, tradeTraceEnabled } from '../../../../../sdk/trade-diagnostics.js';
+import { offerBoundaryEnabled, offerBoundaryTrace } from '../../../../../sdk/offer-boundary-trace.js';
 
 /**
  * Read and process at most one packet. Returns false when the socket has nothing
@@ -85,6 +88,23 @@ export async function handlePacket(c: LiteClient): Promise<boolean> {
     const psize = c.psize;
     c.ptype = -1;
     c.packetsReceived++;
+    if (offerBoundaryEnabled() && psize >= 2 && (opcode === ServerProt.UPDATE_INV_FULL || opcode === ServerProt.UPDATE_INV_PARTIAL)) {
+        const componentId = buf.data[0] * 256 + buf.data[1];
+        if (componentId === 3415 || componentId === 3416) {
+            offerBoundaryTrace(c.loginUser, 'offer-packet-received', () => ({
+                componentId, opcode, cycle: c.cycle.value, packetSequence: c.packetsReceived,
+            }));
+        }
+    }
+    const traced = tradeTraceEnabled(c.loginUser) && [ServerProt.IF_OPENCHAT, ServerProt.IF_OPENMAIN_SIDE,
+        ServerProt.IF_CLOSE, ServerProt.IF_OPENMAIN, ServerProt.IF_OPENSIDE, ServerProt.IF_SETTEXT,
+        ServerProt.UPDATE_INV_STOP_TRANSMIT, ServerProt.UPDATE_INV_FULL, ServerProt.UPDATE_INV_PARTIAL,
+        ServerProt.UPDATE_STAT, ServerProt.UNSET_MAP_FLAG, ServerProt.MESSAGE_GAME, ServerProt.PLAYER_INFO].includes(opcode);
+    if (traced) tradeTrace(c.loginUser, 'lite', 'packet-received', () => ({ opcode, size: psize,
+        packetSequence: c.packetsReceived, cycle: c.cycle.value,
+        payload: opcode === ServerProt.PLAYER_INFO ? undefined : Array.from(buf.data.subarray(0, Math.min(psize, 512))),
+        truncated: opcode !== ServerProt.PLAYER_INFO && psize > 512,
+        main: c.mainModalId, chat: c.chatModalId, side: c.sideModalId }));
 
     // A handler that throws is a bad packet, not a dead session: the framing above
     // already consumed exactly psize bytes, so the stream is still in sync - the
@@ -93,6 +113,11 @@ export async function handlePacket(c: LiteClient): Promise<boolean> {
     // recordDispatchError).
     try {
         dispatch(c, opcode, buf, psize);
+        if (traced) tradeTrace(c.loginUser, 'lite', 'packet-applied', () => ({ opcode,
+            packetSequence: c.packetsReceived, cycle: c.cycle.value,
+            main: c.mainModalId, chat: c.chatModalId, side: c.sideModalId,
+            dialog: c.chatModalId === -1 ? undefined : c.getDialogText().slice(0, 12),
+            rc: { level: c.statBaseLevel[20], xp: c.statXP[20] } }));
     } catch (err) {
         c.recordDispatchError(opcode, err);
     }
@@ -287,6 +312,12 @@ export function dispatch(c: LiteClient, opcode: number, buf: Packet, psize: numb
             }
             return;
         }
+        case ServerProt.HINT_ARROW: {readHintArrow(c,buf);return;}
+        case ServerProt.TUT_FLASH: {
+            c.tutFlashIcon=buf.g1();
+            if(c.tutFlashIcon===c.activeIcon)c.activeIcon=c.tutFlashIcon===3?1:3;
+            return;
+        }
         case ServerProt.TUT_OPEN: {
             const comId = buf.g2b();
             c.tutComId = comId;
@@ -295,7 +326,9 @@ export function dispatch(c: LiteClient, opcode: number, buf: Packet, psize: numb
 
         // ----------------------------------------------------------- inventory
         case ServerProt.UPDATE_INV_STOP_TRANSMIT: {
-            const inv = c.ifMutable(buf.g2());
+            const componentId = buf.g2();
+            if (componentId === 5382) c.bankContentsKnown = false;
+            const inv = c.ifMutable(componentId);
             if (inv?.linkObjType) {
                 for (let i = 0; i < inv.linkObjType.length; i++) {
                     inv.linkObjType[i] = 0;
@@ -304,7 +337,8 @@ export function dispatch(c: LiteClient, opcode: number, buf: Packet, psize: numb
             return;
         }
         case ServerProt.UPDATE_INV_FULL: {
-            const inv = c.ifMutable(buf.g2());
+            const componentId = buf.g2();
+            const inv = c.ifMutable(componentId);
             if (!inv?.linkObjType || !inv.linkObjNumber) {
                 return;
             }
@@ -321,6 +355,7 @@ export function dispatch(c: LiteClient, opcode: number, buf: Packet, psize: numb
                 inv.linkObjType[i] = 0;
                 inv.linkObjNumber[i] = 0;
             }
+            if (componentId === 5382) c.bankContentsKnown = true;
             return;
         }
         case ServerProt.UPDATE_INV_PARTIAL: {

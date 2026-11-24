@@ -32,10 +32,14 @@ import type {
 import type { TradeState } from './types';
 import { PRAYER_INDICES, PRAYER_NAMES, PLAYER_CHAT_TYPES, isPlayerChat, TRADE_REQUEST_CHAT_TYPE } from './types';
 import { ChatHistory } from './chat-history';
+import { LockstepClock } from './clock';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { executionContext, executionWait, throwIfExecutionAborted } from './execution-context';
 import { redactCredentials } from './redact';
+import { tradeTrace, tradeTraceAction, tradeTraceState } from './trade-diagnostics';
 import * as pathfinding from './pathfinding';
 import { matchesPlayerName, playerNameForms, resolveInterfaceOption, shortestNameMatch, type InterfaceOptionSelector } from './action-quantity';
+import { PathfindingClient, type PathResult, type PathWaypoint, type DoorRoute } from './pathfinding-client';
 
 /**
  * Apply {@link FindOptions} to a find* winner. `shortestNameMatch` already
@@ -179,8 +183,73 @@ import { chunkMessage } from './chunking';
 export { Spells, type SpellName } from './spells';
 
 export class BotSDK {
+    private clock?: LockstepClock;
+    private readonly tickBatches = new AsyncLocalStorage<{ active: boolean }>();
+
+    /**
+     * Dispatch several actions before the next automatic lockstep tick.
+     * Automatic action yields are skipped inside this async closure; the
+     * outermost closure yields once on exit, including when it throws, since
+     * actions already dispatched cannot be rolled back. Nested calls share
+     * the outer batch. Await all work started by the callback.
+     *
+     * Reading an existing observation (including dialogue) is fine here.
+     * Helpers are allowed, but helpers that wait for a new server response,
+     * explicit yield(), and tick/condition waits can advance additional ticks.
+     * Use dispatch-only actions when every input must precede the same tick.
+     * On a live server this simply runs the callback: its independent clock
+     * means that delivery within one server tick cannot be guaranteed.
+     */
+    async inOneTick<T>(callback: () => T | Promise<T>): Promise<T> {
+        if (this.tickBatches.getStore()?.active) return callback();
+        const scope = { active: true };
+        return this.tickBatches.run(scope, async () => {
+            let failed = false;
+            let failure: unknown;
+            try {
+                return await callback();
+            } catch (error) {
+                failed = true;
+                failure = error;
+                throw error;
+            } finally {
+                scope.active = false;
+                if (this.clock) {
+                    try {
+                        await this.clock.yield();
+                    } catch (error) {
+                        if (failed) throw new AggregateError([failure, error], 'inOneTick callback and final yield failed');
+                        throw error;
+                    }
+                }
+            }
+        });
+    }
+
+    /** Enable only after connecting to a paused test world with a lockstep client. */
+    setClockMode(mode: 'realtime' | 'lockstep'): void {
+        this.clock = mode === 'lockstep' ? new LockstepClock(async () => {
+            const result = await this.dispatchAction({ type: 'testClockYield', reason: 'Test clock' });
+            const state = result.data as BotWorldState | undefined;
+            if (!result.success || !state || !Number.isSafeInteger(state.tick)) {
+                throw new Error(result.message ?? 'Lockstep yield failed');
+            }
+            // The acknowledged result contains the fully drained observation;
+            // ordinary gateway state fanout can coalesce intermediate updates.
+            this.handleMessage(JSON.stringify({ type: 'sdk_state', state }));
+            return this.getState()!;
+        }) : undefined;
+    }
+
+    get clockMode(): 'realtime' | 'lockstep' { return this.clock ? 'lockstep' : 'realtime'; }
+
+    /** Let one game tick pass, either observed live or requested in lockstep. */
+    async yield(): Promise<BotWorldState> {
+        return this.clock ? this.clock.yield() : this.waitForTicks(1);
+    }
     readonly config: Required<SDKConfig>;
-    private ws: WebSocket | null = null;
+    private ws: import('./types').SDKSocket | null = null;
+    private readonly customTransport: boolean;
     private state: BotWorldState | null = null;
     private stateReceivedAt: number = 0;
     /**
@@ -203,6 +272,7 @@ export class BotSDK {
     private connectPromise: Promise<void> | null = null;
     private sdkClientId: string;
     private temporaryDoorBlocks = new pathfinding.TemporaryDoorBlocklist();
+    private pathfindingClient?: PathfindingClient;
 
     /** True once the gateway has accepted our credentials (sdk_connected received). */
     private authenticated = false;
@@ -214,10 +284,14 @@ export class BotSDK {
     private intentionalDisconnect = false;
 
     constructor(config: SDKConfig) {
+        this.customTransport = !!config.socketFactory;
         this.config = {
+            socketFactory: config.socketFactory ?? ((url: string) => new WebSocket(url)),
             botUsername: config.botUsername,
             password: config.password || '',
             gatewayUrl: config.gatewayUrl || '',
+            pathfindingServer: config.pathfindingServer ?? (typeof process !== 'undefined' ? process.env.PATHFINDING_SERVER : undefined) ?? '',
+            pathfindingTimeout: config.pathfindingTimeout ?? 5000,
             host: config.host || 'localhost',
             port: config.port || 7780,
             connectionMode: config.connectionMode || 'control',
@@ -234,6 +308,9 @@ export class BotSDK {
             reconnectMaxDelay: config.reconnectMaxDelay ?? 30000,
             showChat: config.showChat ?? true
         };
+        if (this.config.pathfindingServer) {
+            this.pathfindingClient = new PathfindingClient(this.config.pathfindingServer, this.config.pathfindingTimeout);
+        }
         this.sdkClientId = `sdk-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     }
 
@@ -276,12 +353,12 @@ export class BotSDK {
 
         const configuredUrl = this.config.gatewayUrl || `ws://${this.config.host}:${this.config.port}`;
         throwIfExecutionAborted();
-        this.connectPromise = preferDirectGateway(configuredUrl).then(url => new Promise<void>((resolve, reject) => {
+        this.connectPromise = (this.customTransport ? Promise.resolve(configuredUrl) : preferDirectGateway(configuredUrl)).then(url => new Promise<void>((resolve, reject) => {
             if (this.intentionalDisconnect) {
                 reject(new Error('Disconnected while connecting'));
                 return;
             }
-            this.ws = new WebSocket(url);
+            this.ws = this.config.socketFactory(url);
 
             // One deadline for the whole handshake - socket open AND the
             // gateway's sdk_connected/sdk_error answer. The old timer was
@@ -341,7 +418,8 @@ export class BotSDK {
             this.ws.onerror = (error) => {
                 console.warn('[LOGOUT DEBUG] SDK WebSocket error event');
                 clearTimeout(deadline);
-                reject(new Error('WebSocket error'));
+                const detail = this.customTransport && (error as ErrorEvent).message;
+                reject(new Error(detail || 'WebSocket error'));
             };
 
             const checkConnected = (event: MessageEvent) => {
@@ -1082,6 +1160,13 @@ export class BotSDK {
     // ============ Plumbing: Raw Actions ============
 
     private async sendAction(action: BotAction): Promise<ActionResult> {
+        const result = await this.dispatchAction(action);
+        const readOnly = ['none', 'scanNearbyLocs', 'scanGroundItems', 'getComponentOptions', 'getInventory', 'screenshot'];
+        if (this.clock && result.success && !readOnly.includes(action.type) && !this.tickBatches.getStore()?.active) await this.clock.yield();
+        return result;
+    }
+
+    private async dispatchAction(action: BotAction): Promise<ActionResult> {
         if (this.connectionState === 'reconnecting') {
             console.log(`[BotSDK] Waiting for reconnection before sending action: ${action.type}`);
             await this.waitForConnection();
@@ -1092,17 +1177,21 @@ export class BotSDK {
         }
 
         const actionId = `act-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        tradeTrace(this.config.botUsername, 'sdk', 'action-submit', () => ({ actionId,
+            action: tradeTraceAction(action), stateAgeMs: this.getStateAge(), state: tradeTraceState(this.state) }));
 
         try {
             return await executionWait<ActionResult>((resolve, reject) => {
                 const timeout = setTimeout(() => {
                     this.pendingActions.delete(actionId);
+                    tradeTrace(this.config.botUsername, 'sdk', 'action-timeout', () => ({ actionId, action: tradeTraceAction(action) }));
                     reject(new ActionDispatchError(`Action timed out: ${action.type}`, 'timeout'));
                 }, this.config.actionTimeout);
 
                 this.pendingActions.set(actionId, { resolve, reject, timeout });
 
                 try {
+                    tradeTrace(this.config.botUsername, 'sdk', 'action-send', () => ({ actionId }));
                     this.send({
                         type: 'sdk_action',
                         username: this.config.botUsername,
@@ -1142,9 +1231,9 @@ export class BotSDK {
         return this.sendAction({ type: 'interactLoc', x, z, locId, optionIndex: option, reason: 'SDK' });
     }
 
-    /** Interact with an NPC by index and option. */
-    async sendInteractNpc(npcIndex: number, option: number = 1): Promise<ActionResult> {
-        return this.sendAction({ type: 'interactNpc', npcIndex, optionIndex: option, reason: 'SDK' });
+    /** Interact with an NPC. Set route:false to preserve a position already in range; the server still validates reach. */
+    async sendInteractNpc(npcIndex: number, option: number = 1, options: { route?: boolean } = {}): Promise<ActionResult> {
+        return this.sendAction({ type: 'interactNpc', npcIndex, optionIndex: option, ...(options.route === undefined ? {} : { route: options.route }), reason: 'SDK' });
     }
 
     /** Interact with a player by index and option (1-5). Option 2 = Attack (wilderness), 3 = Follow, 4 = Trade. */
@@ -1340,7 +1429,7 @@ export class BotSDK {
             };
         }
 
-        return this.sendClickComponent(option.componentId);
+        return option.operationIndex!==undefined ? this.sendClickComponentWithOption(option.componentId,option.operationIndex,option.slot??0) : this.sendClickComponent(option.componentId);
     }
 
     /**
@@ -1364,7 +1453,7 @@ export class BotSDK {
                 reason: 'no_match',
             };
         }
-        return this.sendClickComponent(option.componentId);
+        return option.operationIndex!==undefined ? this.sendClickComponentWithOption(option.componentId,option.operationIndex,option.slot??0) : this.sendClickComponent(option.componentId);
     }
 
     /** Accept character design in tutorial. */
@@ -1634,6 +1723,34 @@ export class BotSDK {
     }
 
     /**
+     * Cast a self-target spell from the magic side tab (teleports, self-cast
+     * enchantments/alchemy buttons) by its button label, e.g.
+     * `await sdk.castMagicSpell(/trollheim teleport/i)`.
+     *
+     * The magic tab index and the button's global component id are resolved
+     * from the published `state.magicTab` (populated by clients that collect
+     * the magic tab layout); the call switches to the magic tab and clicks
+     * the button, which the server routes to the spell's if_button trigger.
+     * Dispatch success does not prove the server applied the cast - check
+     * position or XP for the effect.
+     */
+    async castMagicSpell(label: string | RegExp): Promise<ActionResult> {
+        const state = this.getState();
+        const magic = state?.magicTab;
+        if (!magic || !magic.known) {
+            return { success: false, reason: 'unknown', message: 'Magic tab layout not published by this client' };
+        }
+        const pattern = typeof label === 'string' ? new RegExp(label, 'i') : label;
+        const button = magic.buttons.find(b => pattern.test(b.label));
+        if (!button) {
+            return { success: false, reason: 'unknown', message: `No magic tab button matches ${label}` };
+        }
+        const tab = await this.sendSetTab(magic.tabIndex);
+        if (!tab.success) return tab;
+        return this.sendClickComponent(button.componentId);
+    }
+
+    /**
      * Send a single chat message. The server caps public chat at {@link maxMessageLength}
      * chars (400 on rs-sdk servers) and runs a word filter; `result.data` reports
      * `{ sent, truncated, filtered, finalText }` so you know if your message was clipped
@@ -1782,14 +1899,15 @@ export class BotSDK {
         });
     }
 
-    // ============ Local Pathfinding ============
+    // ============ Pathfinding ============
 
-    /** Find path to destination using local collision data. */
+    /** Synchronous local pathfinding. With pathfindingServer configured, use sendFindPath instead. */
     findPath(
         destX: number,
         destZ: number,
         maxWaypoints: number = 500
     ): { success: boolean; waypoints: Array<{ x: number; z: number; level: number }>; reachedDestination?: boolean; error?: string } {
+        if (this.pathfindingClient) throw new Error('Remote pathfinding is asynchronous; use await sdk.sendFindPath()');
         const state = this.getState();
         if (!state?.player) {
             return { success: false, waypoints: [], error: 'No player state available' };
@@ -1817,6 +1935,10 @@ export class BotSDK {
             this.temporaryDoorBlocks.active()
         );
 
+        return this.finishPath(destX, destZ, waypoints, destZoneAllocated);
+    }
+
+    private finishPath(destX: number, destZ: number, waypoints: PathWaypoint[], destZoneAllocated: boolean): PathResult {
         // If no waypoints and destination zone isn't allocated, that's expected -
         // we just can't path there yet (might need to open a door first)
         if (waypoints.length === 0 && !destZoneAllocated) {
@@ -1848,6 +1970,7 @@ export class BotSDK {
      * The shared collision map is never mutated beyond the synchronous query.
      */
     blockDoorTemporarily(level: number, x: number, z: number, ttlMs: number = 30_000): boolean {
+        if (this.pathfindingClient) throw new Error('Remote pathfinding is asynchronous; use await sdk.sendBlockDoorTemporarily()');
         const door = pathfinding.getDoorAt(level, x, z);
         if (!door) return false;
         this.temporaryDoorBlocks.block(door, ttlMs);
@@ -1859,13 +1982,48 @@ export class BotSDK {
         return this.temporaryDoorBlocks.has(level, x, z);
     }
 
-    /** Find path to destination (async alias for findPath). */
+    /** Find a path using the configured remote service or local maps. */
     async sendFindPath(
         destX: number,
         destZ: number,
         maxWaypoints: number = 500
     ): Promise<{ success: boolean; waypoints: Array<{ x: number; z: number; level: number }>; reachedDestination?: boolean; error?: string }> {
-        return this.findPath(destX, destZ, maxWaypoints);
+        throwIfExecutionAborted();
+        if (!this.pathfindingClient) return this.findPath(destX, destZ, maxWaypoints);
+        const player = this.getState()?.player;
+        if (!player) return { success: false, waypoints: [], error: 'No player state available' };
+        const result = await this.pathfindingClient.findPath(
+            { x: player.worldX, z: player.worldZ, level: player.level },
+            { x: destX, z: destZ }, maxWaypoints, this.temporaryDoorBlocks.active(),
+        );
+        if (!result.success) return { success: false, waypoints: [], error: result.error };
+        return this.finishPath(destX, destZ, result.waypoints, result.destinationZoneAllocated!);
+    }
+
+    /** Query tile walkability without loading local maps when using a service. */
+    async sendIsTileWalkable(level: number, x: number, z: number): Promise<boolean> {
+        throwIfExecutionAborted();
+        return this.pathfindingClient
+            ? this.pathfindingClient.isTileWalkable(level, x, z)
+            : pathfinding.isTileWalkable(level, x, z);
+    }
+
+    /** Add door approach waypoints using the configured map backend. */
+    async sendPlanDoorRoute(waypoints: PathWaypoint[], start?: { x: number; z: number }): Promise<DoorRoute> {
+        throwIfExecutionAborted();
+        return this.pathfindingClient
+            ? this.pathfindingClient.planDoorRoute(waypoints, start)
+            : pathfinding.planDoorRoute(waypoints, start);
+    }
+
+    /** Temporarily exclude a door for this SDK session only; no local map fallback. */
+    async sendBlockDoorTemporarily(level: number, x: number, z: number, ttlMs: number = 30_000): Promise<boolean> {
+        throwIfExecutionAborted();
+        if (!this.pathfindingClient) return this.blockDoorTemporarily(level, x, z, ttlMs);
+        const door = await this.pathfindingClient.getDoor(level, x, z);
+        if (!door) return false;
+        this.temporaryDoorBlocks.block(door, ttlMs);
+        return true;
     }
 
     // ============ Plumbing: State Waiting ============
@@ -1932,6 +2090,7 @@ export class BotSDK {
         timeout: number,
         timeoutMessage: string,
     ): Promise<BotWorldState> {
+        if (this.clock) return this.clock.wait(predicate, timeout, timeoutMessage);
         return executionWait<BotWorldState>((resolve, reject) => {
             const timeoutId = setTimeout(() => reject(new Error(timeoutMessage)), timeout);
             const unsubscribe = this.onStateUpdate(state => {
@@ -2065,6 +2224,8 @@ export class BotSDK {
                 }) as SkillState[];
             }
 
+            tradeTrace(this.config.botUsername, 'sdk', 'state-received', () => ({
+                publishedAt: message.stateReceivedAt, state: tradeTraceState(message.state) }));
             this.state = message.state;
             // Use server timestamp if available, otherwise use local time
             this.stateReceivedAt = message.stateReceivedAt || Date.now();
@@ -2078,6 +2239,9 @@ export class BotSDK {
         }
 
         if (message.type === 'sdk_action_result' && message.actionId) {
+            tradeTrace(this.config.botUsername, 'sdk', 'action-result', () => ({ actionId: message.actionId,
+                pending: this.pendingActions.has(message.actionId!), success: message.result?.success,
+                phase: message.result?.phase, reason: message.result?.reason }));
             const pending = this.pendingActions.get(message.actionId);
             if (pending) {
                 clearTimeout(pending.timeout);

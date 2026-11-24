@@ -155,6 +155,21 @@
 
 ## BotSDK (low-level)
 
+### Other
+
+| Signature | Description |
+|---|---|
+| `async inOneTick<T>(callback: () => T \| Promise<T>): Promise<T>` | Dispatch several actions before the next automatic lockstep tick. Automatic action yields are skipped inside this async closure; the outermost closure yields once on exit, including when it throws, since actions already dispatched cannot be rolled back. Nested calls share the outer batch. Await all work started by the callback. Reading an existing observation (including dialogue) is fine here. Helpers are allowed, but helpers that wait for a new server response, explicit yield(), and tick/condition waits can advance additional ticks. Use dispatch-only actions when every input must precede the same tick. On a live server this simply runs the callback: its independent clock means that delivery within one server tick cannot be guaranteed. |
+| `setClockMode(mode: 'realtime' \| 'lockstep'): void` | Enable only after connecting to a paused test world with a lockstep client. |
+| `async yield(): Promise<BotWorldState>` | Let one game tick pass, either observed live or requested in lockstep. |
+| `async checkBotStatus(): Promise<BotStatus>` | Check bot status via gateway HTTP endpoint. Returns info about whether bot is connected and who else is controlling/observing. |
+| `async launchBrowser(): Promise<void>` | Launch native browser to client URL. Uses the `open` package for cross-platform support (macOS, Windows, Linux, WSL). Falls back to printing the URL if no browser can be opened. |
+| `countInventoryItems(pattern: string \| RegExp): number` | Count total item quantity matching a name pattern. This sums stack sizes across every matching slot. Use `getInventory().filter(...)` when the number of occupied slots is needed. |
+| `async clickInterfaceOption(selector: InterfaceOptionSelector): Promise<ActionResult>` | Click exactly one interface option, selected by its state object or by visible text (substring for strings, match for regexes). This dispatches the option's `componentId` and never interprets `InterfaceOption.index` as an array position. |
+| `async castMagicSpell(label: string \| RegExp): Promise<ActionResult>` | Cast a self-target spell from the magic side tab (teleports, self-cast enchantments/alchemy buttons) by its button label, e.g. `await sdk.castMagicSpell(/trollheim teleport/i)`. The magic tab index and the button's global component id are resolved from the published `state.magicTab` (populated by clients that collect the magic tab layout); the call switches to the magic tab and clicks the button, which the server routes to the spell's if_button trigger. Dispatch success does not prove the server applied the cast - check position or XP for the effect. |
+| `async dm(targetName: string, text: string, opts: { maxLen?: number; delayTicks?: number } = {}): Promise<ActionResult[]>` | Send a private message of any length, auto-split into chunks like {@link say}. Returns one ActionResult per chunk. |
+| `blockDoorTemporarily(level: number, x: number, z: number, ttlMs: number = 30_000): boolean` | Temporarily exclude a known door from this SDK instance's path queries. The shared collision map is never mutated beyond the synchronous query. |
+
 ### Connection & Subscriptions
 
 | Signature | Description |
@@ -210,17 +225,6 @@
 | `getActivePrayers(): PrayerName[]` | Get list of all currently active prayer names. |
 | `isDoorTemporarilyBlocked(level: number, x: number, z: number): boolean` | Check this SDK session's non-expired temporary door evidence. |
 
-### Other
-
-| Signature | Description |
-|---|---|
-| `async checkBotStatus(): Promise<BotStatus>` | Check bot status via gateway HTTP endpoint. Returns info about whether bot is connected and who else is controlling/observing. |
-| `async launchBrowser(): Promise<void>` | Launch native browser to client URL. Uses the `open` package for cross-platform support (macOS, Windows, Linux, WSL). Falls back to printing the URL if no browser can be opened. |
-| `countInventoryItems(pattern: string \| RegExp): number` | Count total item quantity matching a name pattern. This sums stack sizes across every matching slot. Use `getInventory().filter(...)` when the number of occupied slots is needed. |
-| `async clickInterfaceOption(selector: InterfaceOptionSelector): Promise<ActionResult>` | Click exactly one interface option, selected by its state object or by visible text (substring for strings, match for regexes). This dispatches the option's `componentId` and never interprets `InterfaceOption.index` as an array position. |
-| `async dm(targetName: string, text: string, opts: { maxLen?: number; delayTicks?: number } = {}): Promise<ActionResult[]>` | Send a private message of any length, auto-split into chunks like {@link say}. Returns one ActionResult per chunk. |
-| `blockDoorTemporarily(level: number, x: number, z: number, ttlMs: number = 30_000): boolean` | Temporarily exclude a known door from this SDK instance's path queries. The shared collision map is never mutated beyond the synchronous query. |
-
 ### Condition Waiting
 
 | Signature | Description |
@@ -261,7 +265,7 @@
 |---|---|
 | `async sendWalk(x: number, z: number, running: boolean = true): Promise<ActionResult>` | Send walk command to coordinates. |
 | `async sendInteractLoc(x: number, z: number, locId: number, option: number = 1): Promise<ActionResult>` | Interact with a location (tree, rock, door, etc). |
-| `async sendInteractNpc(npcIndex: number, option: number = 1): Promise<ActionResult>` | Interact with an NPC by index and option. |
+| `async sendInteractNpc(npcIndex: number, option: number = 1, options: { route?: boolean } = {}): Promise<ActionResult>` | Interact with an NPC. Set route:false to preserve a position already in range; the server still validates reach. |
 | `async sendInteractPlayer(playerIndex: number, option: number = 2, options: { approach?: boolean } = {}): Promise<ActionResult>` | Interact with a player by index and option (1-5). Option 2 = Attack (wilderness), 3 = Follow, 4 = Trade. |
 | `async sendTalkToNpc(npcIndex: number): Promise<ActionResult>` | Talk to an NPC by index. |
 | `async sendPickup(x: number, z: number, itemId: number): Promise<ActionResult>` | Pick up a ground item. |
@@ -305,13 +309,16 @@
 | `async sendBankDeposit(slot: number, amount: number = 1): Promise<ActionResult>` | Deposit item to bank by slot. |
 | `async sendBankWithdraw(slot: number, amount: number = 1): Promise<ActionResult>` | Withdraw item from bank by slot. |
 | `async sendScreenshot(timeout: number = 10000): Promise<string>` | Request a screenshot from the bot client. Returns the screenshot as a data URL (data:image/png;base64,...). |
-| `async sendFindPath(destX: number, destZ: number, maxWaypoints: number = 500): Promise<{ success: boolean; waypoints: Array<{ x: number; z: number; level: number }>; reachedDestination?: boolean; error?: string }>` | Find path to destination (async alias for findPath). |
+| `async sendFindPath(destX: number, destZ: number, maxWaypoints: number = 500): Promise<{ success: boolean; waypoints: Array<{ x: number; z: number; level: number }>; reachedDestination?: boolean; error?: string }>` | Find a path using the configured remote service or local maps. |
+| `async sendIsTileWalkable(level: number, x: number, z: number): Promise<boolean>` | Query tile walkability without loading local maps when using a service. |
+| `async sendPlanDoorRoute(waypoints: PathWaypoint[], start?: { x: number; z: number }): Promise<DoorRoute>` | Add door approach waypoints using the configured map backend. |
+| `async sendBlockDoorTemporarily(level: number, x: number, z: number, ttlMs: number = 30_000): Promise<boolean>` | Temporarily exclude a door for this SDK session only; no local map fallback. |
 
 ### Pathfinding
 
 | Signature | Description |
 |---|---|
-| `findPath(destX: number, destZ: number, maxWaypoints: number = 500): { success: boolean; waypoints: Array<{ x: number; z: number; level: number }>; reachedDestination?: boolean; error?: string }` | Find path to destination using local collision data. |
+| `findPath(destX: number, destZ: number, maxWaypoints: number = 500): { success: boolean; waypoints: Array<{ x: number; z: number; level: number }>; reachedDestination?: boolean; error?: string }` | Synchronous local pathfinding. With pathfindingServer configured, use sendFindPath instead. |
 
 ---
 
@@ -338,6 +345,8 @@ interface PlayerCombatState {
 
 ```typescript
 interface PlayerState {
+  /** Server world slot from UPDATE_PID; -1 before receipt. Absent on older clients. NPC faceEntity/targetIndex refers to us when equal to 32768 + worldSlot. This is NOT the client's reserved local-player array index (2047). */
+  worldSlot?: number;
   name: string;
   combatLevel: number;
   /** Current hitpoints level (boosted/drained) */
@@ -384,6 +393,8 @@ interface SkillState {
 
 ```typescript
 interface DialogState {
+  /** True while a server numeric Enter Amount prompt is open. */
+  countInputOpen?: boolean;
   isOpen: boolean;
   options: DialogOption[];
   isWaiting: boolean;
@@ -391,6 +402,17 @@ interface DialogState {
   pageId?: string;
   text?: string;
   allComponents?: DialogComponent[];
+}
+```
+
+### QuestState
+
+```typescript
+interface QuestState {
+  available: boolean;
+  points?: number;
+  entries: {id:number;name:string;status:'not_started'|'in_progress'|'completed'|'unknown';progress?:number}[];
+  journal?: {questId?:number;title:string;lines:string[]};
 }
 ```
 
@@ -420,6 +442,9 @@ interface ShopState {
 
 ```typescript
 interface BankState {
+  observation?: BankTickObservation;
+  /** Full contents received and transmission has not stopped; false during UI transitions. */
+  contentsKnown?: boolean;
   isOpen: boolean;
   items: BankItem[];
   /** Whether withdrawals arrive as banknotes - the bank_main note/item toggle, mirrored from varp 115 (%bankcert). Meaningless while the bank is closed. */
@@ -491,6 +516,21 @@ interface CombatStyleState {
 }
 ```
 
+### MagicTabState
+
+```typescript
+interface MagicTabState {
+  /** Interface id of the magic side tab the server installed. */
+  tabInterfaceId: number;
+  /** Side tab index to pass to sendSetTab. */
+  tabIndex: number;
+  /** Cast buttons found in the magic tab (graphic buttons with a Cast option). */
+  buttons: MagicSpellButton[];
+  /** False when the magic tab could not be identified from the loaded interfaces. */
+  known: boolean;
+}
+```
+
 ### PrayerState
 
 ```typescript
@@ -535,6 +575,11 @@ interface OpFeedbackState {
 
 ```typescript
 interface BotWorldState {
+  /** Stable for this game-client connection; increments before a replacement starts. */
+  clientGeneration?: number;
+  /** Current game-provided hint arrow; null means no active arrow. */
+  hint?: {type:'tile';x:number;z:number}|{type:'npc'|'player';index:number}|null;
+  tabs?: {running?:boolean;active:number;flashing:number|null;available:{index:number;name:string}[];tutorialText:string[]};
   tick: number;
   /** Version of nearby-player combat-target telemetry emitted by the Lite client. */
   combatTargetTelemetryVersion?: number;
@@ -551,6 +596,7 @@ interface BotWorldState {
   skills: SkillState[];
   inventory: InventoryItem[];
   equipment: InventoryItem[];
+  quests?: QuestState;
   nearbyNpcs: NearbyNpc[];
   nearbyPlayers: NearbyPlayer[];
   nearbyLocs: NearbyLoc[];
@@ -568,6 +614,8 @@ interface BotWorldState {
   modalOpen: boolean;
   modalInterface: number;
   combatStyle?: CombatStyleState;
+  /** Magic side tab layout (cast buttons + component ids); absent on older clients. */
+  magicTab?: MagicTabState;
   combatEvents: CombatEvent[];
   prayers: PrayerState;
   /** Absent when the connected client predates authoritative PK-skull telemetry. */

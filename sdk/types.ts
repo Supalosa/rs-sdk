@@ -21,6 +21,11 @@ export interface PlayerCombatState {
 }
 
 export interface PlayerState {
+    /** Server world slot from UPDATE_PID; -1 before receipt. Absent on older clients.
+     * NPC faceEntity/targetIndex refers to us when equal to 32768 + worldSlot.
+     * This is NOT the client's reserved local-player array index (2047).
+     */
+    worldSlot?: number;
     name: string;
     combatLevel: number;
     /** Current hitpoints level (boosted/drained) */
@@ -264,6 +269,8 @@ export interface DialogComponent {
 }
 
 export interface DialogState {
+    /** True while a server numeric Enter Amount prompt is open. */
+    countInputOpen?: boolean;
     isOpen: boolean;
     options: DialogOption[];
     isWaiting: boolean;
@@ -271,6 +278,12 @@ export interface DialogState {
     pageId?: string;
     text?: string;
     allComponents?: DialogComponent[];
+}
+export interface QuestState {
+    available: boolean;
+    points?: number;
+    entries: {id:number;name:string;status:'not_started'|'in_progress'|'completed'|'unknown';progress?:number}[];
+    journal?: {questId?:number;title:string;lines:string[]};
 }
 
 export interface InterfaceState {
@@ -281,6 +294,10 @@ export interface InterfaceState {
 
 /** A clickable viewport-interface option as published in world state. */
 export interface InterfaceOption {
+    /** Inventory-style menu operation metadata (smithing/crafting). */
+    slot?: number;
+    itemId?: number;
+    operationIndex?: number;
     /**
      * Human-facing 1-based ordinal, for display only. Never pass this to
      * `sendClickInterfaceOption`, which takes a 0-based array position — use
@@ -323,7 +340,19 @@ export interface BankItem {
     count: number;
 }
 
+/** A bank view captured once at a client tick boundary, retained when the bank closes. */
+export interface BankTickObservation {
+    clientGeneration: number;
+    clientTick: number;
+    /** Diagnostic capture time; never an ordering key. */
+    observedAt: string;
+    items: BankItem[];
+}
+
 export interface BankState {
+    observation?: BankTickObservation;
+    /** Full contents received and transmission has not stopped; false during UI transitions. */
+    contentsKnown?: boolean;
     isOpen: boolean;
     items: BankItem[];
     /**
@@ -482,6 +511,25 @@ export interface CombatStyleState {
     known: boolean;
 }
 
+/** A cast button from the magic side tab (teleports, self-cast spells). */
+export interface MagicSpellButton {
+    /** Button label as rendered by the client, e.g. 'Cast Trollheim teleport'. */
+    label: string;
+    /** Global component id to pass to sendClickComponent after sendSetTab(tabIndex). */
+    componentId: number;
+}
+
+export interface MagicTabState {
+    /** Interface id of the magic side tab the server installed. */
+    tabInterfaceId: number;
+    /** Side tab index to pass to sendSetTab. */
+    tabIndex: number;
+    /** Cast buttons found in the magic tab (graphic buttons with a Cast option). */
+    buttons: MagicSpellButton[];
+    /** False when the magic tab could not be identified from the loaded interfaces. */
+    known: boolean;
+}
+
 export interface CombatEvent {
     tick: number;
     /** Monotonic publication revision when this event first became agent-visible. */
@@ -489,6 +537,7 @@ export interface CombatEvent {
     type: 'damage_taken' | 'damage_dealt' | 'kill';
     damage: number;
     sourceType: 'player' | 'npc' | 'other_player';
+    /** Inferred from facing for damage_taken; not an authoritative attacker identity. */
     sourceIndex: number;
     targetType: 'player' | 'npc' | 'other_player';
     targetIndex: number;
@@ -564,6 +613,11 @@ export interface OpFeedbackState {
 }
 
 export interface BotWorldState {
+    /** Stable for this game-client connection; increments before a replacement starts. */
+    clientGeneration?: number;
+    /** Current game-provided hint arrow; null means no active arrow. */
+    hint?: {type:'tile';x:number;z:number}|{type:'npc'|'player';index:number}|null;
+    tabs?: {running?:boolean;active:number;flashing:number|null;available:{index:number;name:string}[];tutorialText:string[]};
     tick: number;
     /** Version of nearby-player combat-target telemetry emitted by the Lite client. */
     combatTargetTelemetryVersion?: number;
@@ -580,6 +634,7 @@ export interface BotWorldState {
     skills: SkillState[];
     inventory: InventoryItem[];
     equipment: InventoryItem[];
+    quests?: QuestState;
     nearbyNpcs: NearbyNpc[];
     nearbyPlayers: NearbyPlayer[];
     nearbyLocs: NearbyLoc[];
@@ -597,6 +652,8 @@ export interface BotWorldState {
     modalOpen: boolean;
     modalInterface: number;
     combatStyle?: CombatStyleState;
+    /** Magic side tab layout (cast buttons + component ids); absent on older clients. */
+    magicTab?: MagicTabState;
     combatEvents: CombatEvent[];
     prayers: PrayerState;
     /** Absent when the connected client predates authoritative PK-skull telemetry. */
@@ -614,10 +671,11 @@ export interface BotWorldState {
 // ============ Action Types ============
 
 export type BotAction =
+    | { type: 'testClockYield'; reason: string }
     | { type: 'none'; reason: string }
     | { type: 'wait'; reason: string; ticks?: number }
     | { type: 'talkToNpc'; npcIndex: number; reason: string }
-    | { type: 'interactNpc'; npcIndex: number; optionIndex: number; reason: string }
+    | { type: 'interactNpc'; npcIndex: number; optionIndex: number; route?: boolean; reason: string }
     | { type: 'interactPlayer'; playerIndex: number; optionIndex: number; approach?: boolean; reason: string }
     | { type: 'clickDialogOption'; optionIndex: number; reason: string; guard?: { pageId: string; componentId: number } }
     // clickComponent: IF_BUTTON packet - for simple buttons, spellcasting, etc.
@@ -688,12 +746,21 @@ export interface ActionResult {
  */
 export type SDKConnectionMode = 'control' | 'observe';
 
+/** Socket surface used by the SDK; embedded hosts can supply an in-process transport. */
+export type SDKSocket = Pick<WebSocket, 'readyState' | 'send' | 'close' | 'onopen' | 'onmessage' | 'onclose' | 'onerror' | 'addEventListener' | 'removeEventListener'>;
+
 export interface SDKConfig {
+    /** Optional local transport. Omitted for ordinary gateway connections. */
+    socketFactory?: (url: string) => SDKSocket;
     botUsername: string;
     /** Password for gateway authentication */
     password?: string;
     /** Full WebSocket URL (e.g. wss://server.com/gateway). Overrides host/port if set. */
     gatewayUrl?: string;
+    /** Optional HTTP(S) pathfinding service origin. Defaults to PATHFINDING_SERVER, otherwise local maps. Empty string forces local maps. */
+    pathfindingServer?: string;
+    /** Deadline per remote map query in milliseconds (default: 5000). */
+    pathfindingTimeout?: number;
     /** Gateway hostname (default: localhost) */
     host?: string;
     /** Gateway port (default: 7780) */

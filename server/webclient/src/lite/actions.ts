@@ -1,3 +1,6 @@
+import {inventoryInterfaceOptions} from '#/bot/interface-inventory-options.js';
+import type {InterfaceOption} from '../../../../sdk/types';
+import {selectClientTab} from '#/bot/tabs.js';
 // The client-side action + accessor surface the bot bridge calls.
 //
 // Ported from the rs-sdk bot methods inside Client.ts. Two rules govern every
@@ -29,6 +32,7 @@ import type { ClientActionResult, LiteClient } from './LiteClient.js';
 import { tryMoveTo } from './movement.js';
 
 const INVENTORY_INTERFACE_ID = 3214;
+const TRADE_SIDE_INV_ID = 3322;
 const EQUIPMENT_INTERFACE_ID = 1688;
 const BANK_MAIN_ID = 5292;
 const BANK_INV_ID = 5382;
@@ -92,14 +96,14 @@ export function talkToNpc(c: LiteClient, npcIndex: number): ClientActionResult {
     return opNpc(c, npcIndex, 1);
 }
 
-export function interactNpc(c: LiteClient, npcIndex: number, optionIndex: number): ClientActionResult {
+export function interactNpc(c: LiteClient, npcIndex: number, optionIndex: number, route = true): ClientActionResult {
     if (optionIndex < 1 || optionIndex > 5) {
         return { success: false, reason: 'invalid_option' };
     }
-    return opNpc(c, npcIndex, optionIndex);
+    return opNpc(c, npcIndex, optionIndex, route);
 }
 
-function opNpc(c: LiteClient, npcIndex: number, optionIndex: number): ClientActionResult {
+function opNpc(c: LiteClient, npcIndex: number, optionIndex: number, route = true): ClientActionResult {
     if (!c.isInGame() || !c.localPlayer) {
         return { success: false, reason: 'not_in_game' };
     }
@@ -122,7 +126,7 @@ function opNpc(c: LiteClient, npcIndex: number, optionIndex: number): ClientActi
     // lineofsight) trigger at tiles the routefinder can never reach, and the
     // server owns the reach check anyway.
     const size = n.type?.size ?? 1;
-    const routed = tryMoveTo(c, n.routeX[0], n.routeZ[0], size, size, 0, 0, 0);
+    const routed = route ? tryMoveTo(c, n.routeX[0], n.routeZ[0], size, size, 0, 0, 0) : false;
 
     c.writeOpcode([ClientProt.OPNPC1, ClientProt.OPNPC2, ClientProt.OPNPC3, ClientProt.OPNPC4, ClientProt.OPNPC5][optionIndex - 1]);
     c.out.p2(npcIndex);
@@ -437,7 +441,14 @@ export function clickInterfaceIop(c: LiteClient, componentId: number, optionInde
     // The engine's InvButtonHandler validates inv.hasAt(slot, obj) exactly, so
     // the real item id must go on the wire (0 only for genuinely empty slots,
     // matching the browser's clickInterfaceIop).
-    const itemId = slotItemId(componentId, slot);
+    // tradeside displays the same owned inventory slots as inventory:inv. Its
+    // first UPDATE_INV can lag an optimistic offer; obj 0 would then be silently
+    // rejected even when the server has already opened the trade. Use the known
+    // owned slot until that view arrives. Visibility/slot/obj validation remains
+    // authoritative on the server; an early packet is still allowed to fail.
+    const tradeSlotMissing = componentId === TRADE_SIDE_INV_ID &&
+        !((IfType.list[componentId]?.linkObjType?.[slot] ?? 0) > 0);
+    const itemId = slotItemId(tradeSlotMissing ? INVENTORY_INTERFACE_ID : componentId, slot);
 
     c.writeOpcode([ClientProt.INV_BUTTON1, ClientProt.INV_BUTTON2, ClientProt.INV_BUTTON3, ClientProt.INV_BUTTON4, ClientProt.INV_BUTTON5][optionIndex - 1]);
     c.out.p2(itemId);
@@ -447,11 +458,8 @@ export function clickInterfaceIop(c: LiteClient, componentId: number, optionInde
 }
 
 export function setTab(c: LiteClient, tabIndex: number): boolean {
-    if (!c.isInGame() || tabIndex < 0 || tabIndex > 13) {
-        return false;
-    }
-    c.activeIcon = tabIndex;
-    return true;
+    if(!c.isInGame())return false;
+    return selectClientTab(c,tabIndex,index=>{c.writeOpcode(ClientProt.TUT_CLICKSIDE);c.out.p1(index);});
 }
 
 export function closeBotModal(c: LiteClient): boolean {
@@ -603,8 +611,8 @@ export function getDialogText(c: LiteClient): string[] {
     return texts;
 }
 
-export function getInterfaceOptions(c: LiteClient): Array<{ index: number; text: string; componentId: number }> {
-    const options: Array<{ index: number; text: string; componentId: number }> = [];
+export function getInterfaceOptions(c: LiteClient): InterfaceOption[] {
+    const options: InterfaceOption[] = [];
     if (c.mainModalId === -1) {
         return options;
     }
@@ -630,6 +638,7 @@ export function getInterfaceOptions(c: LiteClient): Array<{ index: number; text:
     };
 
     scan(c.mainModalId);
+    options.push(...inventoryInterfaceOptions(c.mainModalId,IfType.list,id=>ObjType.list(id).name,options.length));
     return options;
 }
 

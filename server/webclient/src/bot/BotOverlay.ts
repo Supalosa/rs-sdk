@@ -272,11 +272,11 @@ export class BotOverlay implements GatewayMessageHandler {
         }
 
         // Collect interface options (for crafting menus like fletching)
-        const interfaceOptions: Array<{ index: number; text: string; componentId: number }> = [];
+        const interfaceOptions: import('../../../../sdk/types').InterfaceOption[] = [];
         if (this.client.isViewportInterfaceOpen()) {
             const options = this.client.getInterfaceOptions();
             for (const opt of options) {
-                interfaceOptions.push({ index: opt.index, text: opt.text, componentId: opt.componentId });
+                interfaceOptions.push({ ...opt });
             }
         }
 

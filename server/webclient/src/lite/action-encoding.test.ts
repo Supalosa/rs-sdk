@@ -399,3 +399,28 @@ describe('outgoing action encoding', () => {
         expect(c.out.pos).toBe(start);
     });
 });
+
+test('tutorial tab selection encodes TUT_CLICKSIDE once after a real TUT_FLASH packet',()=>{
+ const c=makeClient('tabs');c.ingame=true;c.sideIcon[3]=3213;c.activeIcon=3;
+ const flash=Packet.alloc(1);flash.p1(3);flash.pos=0;
+ dispatch(c,ServerProt.TUT_FLASH,flash,1);
+ expect(c.tutFlashIcon).toBe(3);expect(c.activeIcon).toBe(1);
+ const start=c.out.pos;expect(c.setTab(3)).toBe(true);
+ const r=new Capture(c.out,start);expect(r.g1()).toBe(ClientProt.TUT_CLICKSIDE);expect(r.g1()).toBe(3);
+ const after=c.out.pos;expect(c.setTab(3)).toBe(true);expect(c.out.pos).toBe(after);
+ expect(c.setTab(4)).toBe(false);
+});
+
+test('headless publication preserves smithing slot/item/operation metadata through SDK state',()=>{
+ const option={index:1,text:'Make Bronze dagger',componentId:1119,slot:0,itemId:1205,operationIndex:1};
+ const client={interfaces:{activate(){}},bridge:()=>({collector:{collectState:()=>({dialog:{}})}}),chatModalId:-1,getInterfaceOptions:()=>[option],isViewportInterfaceOpen:()=>true,getViewportInterface:()=>994,getInterfaceDebugInfo:()=>[],isModalOpen:()=>true,getModalInterface:()=>994,isDialogOpen:()=>false,isWaitingForDialog:()=>false};
+ const state=LiteClient.prototype.collectBotState.call(client as never,1);
+ expect(state.interface.options[0]).toEqual(option);
+});
+
+test('headless client consumes real hint packets and replaces or clears the target',()=>{
+ const c=makeClient('hints');const tile=Packet.alloc(6);tile.p1(5);tile.p2(3086);tile.p2(3126);tile.p1(150);tile.pos=0;
+ dispatch(c,ServerProt.HINT_ARROW,tile,6);expect(c.hintType).toBe(2);expect(c.hintTileX).toBe(3086);expect(c.hintTileZ).toBe(3126);
+ const npc=Packet.alloc(3);npc.p1(1);npc.p2(4271);npc.pos=0;dispatch(c,ServerProt.HINT_ARROW,npc,3);expect(c.hintType).toBe(1);expect(c.hintNpc).toBe(4271);
+ const clear=Packet.alloc(1);clear.p1(0);clear.pos=0;dispatch(c,ServerProt.HINT_ARROW,clear,1);expect(c.hintType).toBe(0);
+});
