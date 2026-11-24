@@ -687,7 +687,7 @@ export class LiteClient {
     private tradeTracePackets: { start: number; end?: number; opcode: number; actionId: string | null }[] = [];
     writeOpcode(opcode: ClientProt): void {
         if (tradeTraceEnabled(this.loginUser) || (offerBoundaryEnabled() &&
-            (opcode === ClientProt.INV_BUTTON4 || this.tradeTracePackets.length > 0))) {
+            (opcode === ClientProt.OPPLAYER4 || opcode === ClientProt.INV_BUTTON4 || this.tradeTracePackets.length > 0))) {
             const previous = this.tradeTracePackets.at(-1);
             if (previous) previous.end = this.out.pos;
             this.tradeTracePackets.push({ start: this.out.pos, opcode, actionId: this.tradeTraceActionId });
@@ -707,6 +707,11 @@ export class LiteClient {
         this.tradeTracePackets = [];
         for (const p of packets) if (selected.has(p.opcode)) {
             const offset = p.start + 1;
+            if (offerBoundaryEnabled() && p.opcode === ClientProt.OPPLAYER4 && (p.end ?? this.out.pos) === offset + 2) {
+                offerBoundaryTrace(this.loginUser, 'trade-request-flush-attempt', () => ({
+                    cycle: this.cycle.value, peerIndex: this.out.data[offset] * 256 + this.out.data[offset + 1],
+                }));
+            }
             if (offerBoundaryEnabled() && p.opcode === ClientProt.INV_BUTTON4 &&
                 (p.end ?? this.out.pos) === offset + 6 && this.out.data[offset + 4] * 256 + this.out.data[offset + 5] === 3322) {
                 offerBoundaryTrace(this.loginUser, 'offer-flush-attempt', () => ({
