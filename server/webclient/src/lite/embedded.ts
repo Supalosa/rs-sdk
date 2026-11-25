@@ -9,6 +9,10 @@ import { offerBoundaryEnabled, offerBoundarySnapshot, offerBoundaryTrace } from 
 import { installClientTestClock } from './test-clock.js';
 export const leaseAuthorizationVersion = 1;
 
+const ACTION_PUMP_MS = 1;
+// Embedded SDK waits use a 20 ms client cycle independently of action polling.
+const WAIT_UNIT_MS = 20;
+
 /** A local socket speaking the existing SDK message contract, with no gateway listener. */
 class EmbeddedSocket extends EventTarget {
     readyState = 0;
@@ -24,7 +28,7 @@ class EmbeddedSocket extends EventTarget {
     private queue = new BotActionQueue();
     private timer?: ReturnType<typeof setInterval>;
     private tick = 0;
-    private waiting = 0;
+    private waitUntil?: number;
     private authenticated = false;
     private testClock?: ReturnType<typeof installClientTestClock>;
     constructor(
@@ -70,7 +74,7 @@ class EmbeddedSocket extends EventTarget {
                 this.publish();
             });
             this.readyState = 1;
-            this.timer = setInterval(() => this.pump(), 5);
+            this.timer = setInterval(() => this.pump(), ACTION_PUMP_MS);
             this.event('open');
             const end = await this.session.stopped;
             this.finishLogout(end.reason === 'logged-out');
@@ -111,7 +115,7 @@ class EmbeddedSocket extends EventTarget {
         this.queue.beginGeneration();
         const active = this.queue.active;
         if (active?.action.type === 'wait') {
-            this.waiting = 0;
+            this.waitUntil = undefined;
             this.queue.complete(active);
         }
     }
@@ -167,9 +171,11 @@ class EmbeddedSocket extends EventTarget {
                 phase: 'completion',
                 reason: 'queue_expired'
             });
-        if (this.waiting > 0) {
-            this.waiting--;
-            if (this.waiting === 0 && this.queue.active) this.complete(this.queue.active, { success: true, message: 'Wait complete', phase: 'completion' });
+        if (this.waitUntil !== undefined) {
+            const active = this.queue.active;
+            if (active && performance.now() < this.waitUntil) return;
+            this.waitUntil = undefined;
+            if (active) this.complete(active, { success: true, message: 'Wait complete', phase: 'completion' });
             return;
         }
         if (this.queue.active) return;
@@ -187,8 +193,7 @@ class EmbeddedSocket extends EventTarget {
                     value => this.complete(entry, value as ActionResult),
                     () => this.complete(entry, { success: false, message: 'Action execution failed', phase: 'completion', reason: 'execution_error' })
                 );
-            // Keep the existing wait duration when polling the action queue faster.
-            else if (action.type === 'wait' && result.success) this.waiting = (action.ticks || 1) * 4;
+            else if (action.type === 'wait' && result.success) this.waitUntil = performance.now() + (action.ticks || 1) * WAIT_UNIT_MS;
             else this.complete(entry, result);
         } catch {
             this.complete(entry, { success: false, message: 'Action execution failed', phase: 'completion', reason: 'execution_error' });

@@ -1,29 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-
-// StateCollector imports the browser client graph. A tiny DOM shim is enough
-// for module initialization because these tests exercise collection only.
-(globalThis as any).window = {};
-(globalThis as any).document = {
-    hidden: false,
-    body: { appendChild() {}, removeChild() {} },
-    addEventListener() {},
-    removeEventListener() {},
-    getElementById() { return null; },
-    createElement(tag: string) {
-        if (tag === 'canvas') {
-            return {
-                width: 0,
-                height: 0,
-                getContext: () => ({
-                    clearRect() {},
-                    drawImage() {},
-                    getImageData() { return {}; }
-                })
-            };
-        }
-        return {};
-    }
-};
+import '../lite/dom-shim.js';
 
 const { BotStateCollector } = await import('./StateCollector.js');
 const { default: IfType } = await import('#/config/IfType.js');
