@@ -126,6 +126,38 @@ test('expired queued work is acknowledged as failure and never dispatched', asyn
     expect(f.messages.find(message => message.actionId === 'expired')).toMatchObject({ result: { success: false, reason: 'queue_expired' } });
     expect(f.calls).toHaveLength(0);
 });
+
+test('embedded waits hold subsequent actions for 20 ms per requested unit', async () => {
+    let startedAt = 0;
+    let elapsed = 0;
+    const f = await fixture(action => {
+        if (action.type === 'wait') startedAt = performance.now();
+        return { success: true, message: 'dispatched' };
+    });
+    f.socket.addEventListener('message', event => {
+        if (JSON.parse((event as MessageEvent).data).actionId === 'wait') elapsed = performance.now() - startedAt;
+    });
+    f.authenticate();
+    f.action('wait', { type: 'wait', reason: 'fixture', ticks: 4 });
+    f.action('next');
+    await until(() => f.messages.some(message => message.actionId === 'next'));
+    expect(elapsed).toBeGreaterThanOrEqual(80);
+    expect(f.messages.filter(message => message.actionId).map(message => message.actionId)).toEqual(['wait', 'next']);
+});
+
+test('an expired active wait releases the queue before its original deadline', async () => {
+    const f = await fixture();
+    f.authenticate();
+    f.action('long-wait', { type: 'wait', reason: 'fixture', ticks: 1000 }, 1200);
+    await until(() => f.calls.length === 1);
+    f.action('next');
+    await until(() => f.messages.some(message => message.actionId === 'next'));
+    expect(f.messages.find(message => message.actionId === 'long-wait')).toMatchObject({
+        result: { success: false, reason: 'queue_expired' }
+    });
+    expect(f.calls.map(action => action.type)).toEqual(['wait', 'none']);
+});
+
 test('lease authorization is checked at execution even when the expiry timer has not run', async () => {
     let valid=true;
     const f=await fixture(undefined,()=>{if(!valid)throw new Error('Lease expired');});
