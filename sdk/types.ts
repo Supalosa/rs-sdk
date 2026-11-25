@@ -649,6 +649,18 @@ export interface BotWorldState {
     trade?: TradeState;
     /** Null outside the exchange; absent on older clients. */
     ge?: GEState | null;
+    /** Read-only Regicide still readings, present only while the still modal is open and the readings are available. */
+    readonly regicideStill?: {
+        readonly progress: number;
+        /** Needle position, 0–12. */
+        readonly pressure: number;
+        /** Needle position, 0–12. */
+        readonly heat: number;
+        /** Valve setting, 0–2. */
+        readonly pressureValve: number;
+        /** Regulator setting, 0–2. */
+        readonly tarRegulator: number;
+    };
     modalOpen: boolean;
     modalInterface: number;
     combatStyle?: CombatStyleState;

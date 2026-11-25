@@ -1,4 +1,4 @@
-import {inventoryInterfaceOptions} from '#/bot/interface-inventory-options.js';
+import { inventoryInterfaceOptions, visibleInventoryOperation } from '#/bot/interface-inventory-options.js';
 import type {InterfaceOption} from '../../../../sdk/types';
 import {selectClientTab} from '#/bot/tabs.js';
 // The client-side action + accessor surface the bot bridge calls.
@@ -216,11 +216,9 @@ export function useInventoryItem(c: LiteClient, slot: number, optionIndex: numbe
         return false;
     }
 
-    // The engine only wires OPHELD1-5 to the main inventory; every other
-    // component's item options are inv_button triggers (e.g. [inv_button4,
-    // tradeside:inv]). OPHELD with a foreign com id passes the wire and is
-    // silently dropped by the handler, so route those to INV_BUTTON instead.
-    if (interfaceId !== INVENTORY_INTERFACE_ID) {
+    // Item-operable grids (including the puzzle board) use OPHELD. Bank and
+    // trade grids instead declare component operations handled by INV_BUTTON.
+    if (interfaceId !== INVENTORY_INTERFACE_ID && !IfType.list[interfaceId]?.objOps) {
         return clickInterfaceIop(c, interfaceId, optionIndex, slot);
     }
 
@@ -438,6 +436,12 @@ export function clickInterfaceIop(c: LiteClient, componentId: number, optionInde
     if (!c.isInGame() || optionIndex < 1 || optionIndex > 5) {
         return false;
     }
+    const com = IfType.list[componentId];
+    if (com?.objOps && !visibleInventoryOperation(com.iop?.[optionIndex - 1])) {
+        const encoded = com.linkObjType?.[slot] ?? 0;
+        return encoded > 0 && !!visibleInventoryOperation(ObjType.list(encoded - 1).iop?.[optionIndex - 1])
+            && useInventoryItem(c, slot, optionIndex, componentId);
+    }
     // The engine's InvButtonHandler validates inv.hasAt(slot, obj) exactly, so
     // the real item id must go on the wire (0 only for genuinely empty slots,
     // matching the browser's clickInterfaceIop).
@@ -638,7 +642,7 @@ export function getInterfaceOptions(c: LiteClient): InterfaceOption[] {
     };
 
     scan(c.mainModalId);
-    options.push(...inventoryInterfaceOptions(c.mainModalId,IfType.list,id=>ObjType.list(id).name,options.length));
+    options.push(...inventoryInterfaceOptions(c.mainModalId, IfType.list, options.length));
     return options;
 }
 

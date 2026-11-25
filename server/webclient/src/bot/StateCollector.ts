@@ -171,6 +171,7 @@ export class BotStateCollector implements ScanProvider {
             }
         }
 
+        const regicideStill = c.mainModalId === 4919 ? this.collectRegicideStill(c.var) : undefined;
         return {
             tick: currentTick,
             combatTargetTelemetryVersion: 2,
@@ -200,6 +201,7 @@ export class BotStateCollector implements ScanProvider {
             hint: collectHintArrow(c),
             quests: collectQuestState(IfType.list, c.var ?? [], c.mainModalId ?? -1),
             interface: this.collectInterfaceState(),
+            ...(regicideStill && { regicideStill }),
             modalOpen: (c.mainModalId ?? -1) !== -1,
             modalInterface: c.mainModalId ?? -1,
             prayers: this.collectPrayerState(),
@@ -211,6 +213,28 @@ export class BotStateCollector implements ScanProvider {
             specialEnergy: specialEnergyPercent(c.var),
             specialActive: specialAttackActive(c.var),
             opFeedback: this.collectOpFeedback(currentTick)
+        };
+    }
+
+    private collectRegicideStill(varps?: ArrayLike<number>): BotState['regicideStill'] {
+        const progress = varps?.[330]; // regicide_still_total
+        const packed = varps?.[331]; // regicide_still_settings
+        if (progress === undefined || packed === undefined) return;
+
+        // The interface uses one-hot positions in four contiguous fields.
+        // Shift unsigned so the tar regulator can read bit 31 of a signed varp.
+        const pressure = (packed >>> 0) & 0x1fff;
+        const heat = (packed >>> 13) & 0x1fff;
+        const pressureValve = (packed >>> 26) & 7;
+        const tarRegulator = packed >>> 29;
+        if (![pressure, heat, pressureValve, tarRegulator].every(bits => bits !== 0 && (bits & (bits - 1)) === 0)) return;
+
+        return {
+            progress,
+            pressure: 31 - Math.clz32(pressure),
+            heat: 31 - Math.clz32(heat),
+            pressureValve: 31 - Math.clz32(pressureValve),
+            tarRegulator: 31 - Math.clz32(tarRegulator)
         };
     }
 

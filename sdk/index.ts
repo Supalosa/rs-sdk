@@ -1255,10 +1255,9 @@ export class BotSDK {
      * Use an inventory item (eat, equip, etc).
      *
      * `interfaceId` selects which inventory component holds the item. The main
-     * inventory (3214, the default) dispatches OPHELD1-5; any other component
-     * (trade offer, bank side inventory, ...) dispatches INV_BUTTON1-5, which
-     * is the packet family the engine actually handles for interface-defined
-     * item options - OPHELD with a foreign component id is silently dropped.
+     * inventory (3214, the default) and item-operable grids dispatch OPHELD1-5.
+     * Component-operated grids such as trade and bank inventories dispatch
+     * INV_BUTTON1-5 instead.
      */
     async sendUseItem(slot: number, option: number = 1, interfaceId?: number): Promise<ActionResult> {
         return this.sendAction({ type: 'useInventoryItem', slot, optionIndex: option, interfaceId, reason: 'SDK' });
@@ -1401,7 +1400,7 @@ export class BotSDK {
         return this.sendAction({ type: 'clickComponent', componentId, reason: 'SDK' });
     }
 
-    /** Click a component using INV_BUTTON packet - for components with inventory operations (smithing, crafting, etc.) */
+    /** Click an inventory component option. A visible component operation takes priority over an item operation at the same index. */
     async sendClickComponentWithOption(componentId: number, optionIndex: number = 1, slot: number = 0): Promise<ActionResult> {
         return this.sendAction({ type: 'clickComponentWithOption', componentId, optionIndex, slot, reason: 'SDK' });
     }

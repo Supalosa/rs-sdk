@@ -1,4 +1,4 @@
-import {inventoryInterfaceOptions} from '#/bot/interface-inventory-options.js';
+import { inventoryInterfaceOptions, visibleInventoryOperation } from '#/bot/interface-inventory-options.js';
 import type {InterfaceOption} from '../../../../sdk/types';
 import {selectClientTab} from '#/bot/tabs.js';
 import {claimBrowserControl,releaseBrowserControl} from '../bot/ClientHandoff';
@@ -1533,16 +1533,14 @@ export class Client extends GameShell {
             return false;
         }
 
-        // The engine only wires OPHELD1-5 to the main inventory (3214); every
-        // other component's item options are inv_button triggers. OPHELD with
-        // a foreign com id passes the wire and is silently dropped by the
-        // handler, so route those to INV_BUTTON instead.
-        if (interfaceId !== 3214) {
+        // Item-operable grids use OPHELD. Bank and trade grids instead declare
+        // component operations handled by INV_BUTTON.
+        const component = IfType.list[interfaceId];
+        if (interfaceId !== 3214 && !component?.objOps) {
             return this.clickInterfaceIop(interfaceId, optionIndex, slot);
         }
 
         // Get item ID from the inventory slot
-        const component = IfType.list[interfaceId];
         if (!component || !component.linkObjType) {
             console.log(`[Client] useInventoryItem FAILED - component not found or no linkObjType for interfaceId: ${interfaceId}`);
             return false;
@@ -2886,7 +2884,7 @@ export class Client extends GameShell {
         };
 
         scanComponent(this.mainModalId);
-        options.push(...inventoryInterfaceOptions(this.mainModalId,IfType.list,id=>ObjType.list(id).name,options.length));
+        options.push(...inventoryInterfaceOptions(this.mainModalId, IfType.list, options.length));
         return options;
     }
 
@@ -2969,6 +2967,11 @@ export class Client extends GameShell {
         if (!com) {
             console.log(`[clickInterfaceIop] Component ${componentId} not found`);
             return false;
+        }
+        if (com.objOps && !visibleInventoryOperation(com.iop?.[optionIndex - 1])) {
+            const encoded = com.linkObjType?.[slot] ?? 0;
+            return encoded > 0 && !!visibleInventoryOperation(ObjType.list(encoded - 1).iop?.[optionIndex - 1])
+                && this.useInventoryItem(slot, optionIndex, componentId);
         }
 
         let itemId = 0;

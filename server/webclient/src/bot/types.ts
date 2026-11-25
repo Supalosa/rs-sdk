@@ -492,6 +492,7 @@ export interface BotState {
     dialog: DialogState;
     /** Interface state (crafting menus, etc.) */
     interface: InterfaceState;
+    readonly regicideStill?: import('../../../../sdk/types').BotWorldState['regicideStill'];
     /** Whether a modal interface is open */
     modalOpen: boolean;
     /** The ID of the modal interface (-1 if none) */

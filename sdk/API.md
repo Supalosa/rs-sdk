@@ -269,7 +269,7 @@
 | `async sendInteractPlayer(playerIndex: number, option: number = 2, options: { approach?: boolean } = {}): Promise<ActionResult>` | Interact with a player by index and option (1-5). Option 2 = Attack (wilderness), 3 = Follow, 4 = Trade. |
 | `async sendTalkToNpc(npcIndex: number): Promise<ActionResult>` | Talk to an NPC by index. |
 | `async sendPickup(x: number, z: number, itemId: number): Promise<ActionResult>` | Pick up a ground item. |
-| `async sendUseItem(slot: number, option: number = 1, interfaceId?: number): Promise<ActionResult>` | Use an inventory item (eat, equip, etc). `interfaceId` selects which inventory component holds the item. The main inventory (3214, the default) dispatches OPHELD1-5; any other component (trade offer, bank side inventory, ...) dispatches INV_BUTTON1-5, which is the packet family the engine actually handles for interface-defined item options - OPHELD with a foreign component id is silently dropped. |
+| `async sendUseItem(slot: number, option: number = 1, interfaceId?: number): Promise<ActionResult>` | Use an inventory item (eat, equip, etc). `interfaceId` selects which inventory component holds the item. The main inventory (3214, the default) and item-operable grids dispatch OPHELD1-5. Component-operated grids such as trade and bank inventories dispatch INV_BUTTON1-5 instead. |
 | `async sendUseEquipmentItem(slot: number, option: number = 1): Promise<ActionResult>` | Use an equipped item (remove, operate, etc). |
 | `async sendDropItem(slot: number): Promise<ActionResult>` | Drop an inventory item. |
 | `async sendUseItemOnItem(sourceSlot: number, targetSlot: number): Promise<ActionResult>` | Use one inventory item on another. Rejected up front while a shop or bank modal is open: those replace the inventory tab, so the server drops the packet as "component not visible" and sends no message at all. Close the modal first — `bot.closeShop()`, `bot.closeInterface()`, or `sendCloseModal()`. |
@@ -278,7 +278,7 @@
 | `async sendClickDialog(option: number = 0): Promise<ActionResult>` | Click a dialog option by its server-assigned index. IMPORTANT: `option` is the **server-assigned index** stored on each `DialogOption.index` field — NOT the array position in `dialog.options`. Server-assigned indices are 1-based: `dialog.options[0].index === 1`. Pass `0` only as the implicit "continue" click for dialogs with no selectable options (the common pattern: pass through narration pages). To click an option by its visible text, prefer `clickDialogByText()`, which also binds the click to its observed dialogue page. This low-level index method does not bind the click to a page. |
 | `async clickDialogByText(pattern: string \| RegExp): Promise<ActionResult>` | Click a dialog option whose visible text matches `pattern`. Convenience wrapper that resolves the server-assigned index for you, sidestepping the 1-based vs 0-based array-position confusion of `sendClickDialog()`. Matches against `DialogOption.text` (case-insensitive by default for string patterns). Binds the click to the observed page and component; it never falls back to an unguarded index when the page changes or the client is too old. |
 | `async sendClickComponent(componentId: number): Promise<ActionResult>` | Click a component using IF_BUTTON packet - for simple buttons, spellcasting, etc. |
-| `async sendClickComponentWithOption(componentId: number, optionIndex: number = 1, slot: number = 0): Promise<ActionResult>` | Click a component using INV_BUTTON packet - for components with inventory operations (smithing, crafting, etc.) |
+| `async sendClickComponentWithOption(componentId: number, optionIndex: number = 1, slot: number = 0): Promise<ActionResult>` | Click an inventory component option. A visible component operation takes priority over an item operation at the same index. |
 | `async sendClickInterfaceOption(arrayPosition: number): Promise<ActionResult>` | Click an interface option by **0-based array position**. Note the mismatch: `InterfaceOption.index` is a 1-based display label, so passing one straight through clicks the option after the one you matched. Prefer `clickInterfaceOption()` when selecting from published state. |
 | `async sendAcceptCharacterDesign(): Promise<ActionResult>` | Accept character design in tutorial. |
 | `async sendRandomizeCharacterDesign(): Promise<ActionResult>` | Randomize character appearance in tutorial. |
@@ -611,6 +611,8 @@ interface BotWorldState {
   trade?: TradeState;
   /** Null outside the exchange; absent on older clients. */
   ge?: GEState | null;
+  /** Read-only Regicide still readings, present only while the still modal is open and the readings are available. */
+  readonly regicideStill?: { readonly progress: number; /** Needle position, 0–12. */ readonly pressure: number; /** Needle position, 0–12. */ readonly heat: number; /** Valve setting, 0–2. */ readonly pressureValve: number; /** Regulator setting, 0–2. */ readonly tarRegulator: number; };
   modalOpen: boolean;
   modalInterface: number;
   combatStyle?: CombatStyleState;

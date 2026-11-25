@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, mock, spyOn, test } from 'bun:test';
 
 import { ClientProt } from '#/io/ClientProt.js';
 import { ServerProt } from '#/io/ServerProt.js';
@@ -87,6 +87,7 @@ const { LiteClient } = await import('../lite/LiteClient.js');
 const { dispatch } = await import('../lite/protocol/incoming.js');
 const { captureBaseInterfaces, resetBaseInterfaces } = await import('../lite/interfaces.js');
 const { BotSDK } = await import('../../../../sdk/index.js');
+import type { InterfaceOption } from '../../../../sdk/types.js';
 
 const BUTTON_OK = 1;
 const BUTTON_CLOSE = 3;
@@ -272,7 +273,149 @@ for (const kind of ['browser', 'lite'] as const) {
             expect(Array.from(f.out.data.subarray(0, f.out.pos))).toEqual([ClientProt.IF_BUTTON, 9202 >> 8, 9202 & 255]);
         });
     });
+
+    describe(`${kind} interface item operations`, () => {
+        for (const mode of ['tiles', 'component priority', 'non-item-operable'] as const) {
+            test(mode, async () => {
+                const original = IfType.list;
+                const lookup = spyOn(ObjType, 'list').mockImplementation(id => ({
+                    id, name: 'Sliding button', iop: [null, null, null, null, 'Move']
+                } as InstanceType<typeof ObjType>));
+                try {
+                    IfType.list = [];
+                    const modal = 11126;
+                    const board = 11130;
+                    defineComponent(modal, { type: 0, children: [board] });
+                    defineComponent(board, {
+                        type: 2, width: 5, height: 5, objOps: mode !== 'non-item-operable',
+                        iop: [null, null, null, null, mode === 'component priority' ? 'Inspect' : null],
+                        linkObjType: new Int32Array(25), linkObjNumber: new Int32Array(25)
+                    });
+                    const out = new Packet(new Uint8Array(64));
+                    let client: any;
+                    if (kind === 'lite') {
+                        resetBaseInterfaces();
+                        captureBaseInterfaces();
+                        client = new LiteClient({
+                            connection: { out, isClosed: false } as never,
+                            locIndex: { lookup: () => 0, mapFlags: () => 0 } as never,
+                            username: 'puzzle-test', password: 'x'
+                        });
+                    } else {
+                        client = Object.assign(Object.create(Client.prototype), {
+                            out, ingame: true, randomIn: null, mainModalId: modal, redrawSide: false, sideIcon: []
+                        });
+                    }
+                    const receive = async (opcode: number, write: (body: InstanceType<typeof Packet>) => void) => {
+                        const body = new Packet(new Uint8Array(128));
+                        write(body);
+                        const size = body.pos;
+                        body.pos = 0;
+                        if (kind === 'lite') dispatch(client, opcode, body, size);
+                        else {
+                            client.ptype = opcode;
+                            client.psize = size;
+                            client.in = new Packet(new Uint8Array(128));
+                            client.stream = { available: size, async readBytes(dst: Uint8Array) { dst.set(body.data.subarray(0, size)); } };
+                            expect(await client.tcpIn()).toBe(true);
+                        }
+                    };
+                    if (kind === 'lite') await receive(ServerProt.IF_OPENMAIN, body => body.p2(modal));
+                    const tiles = [...Array.from({ length: 23 }, (_, i) => 3904 + i * 2), 3950];
+                    tiles.splice(11, 0, tiles.pop()!);
+                    tiles.splice(12, 0, -1);
+                    await receive(ServerProt.UPDATE_INV_FULL, body => {
+                        body.p2(board);
+                        body.p2(25);
+                        for (const id of tiles) { body.p2(id + 1); body.p1(id === -1 ? 0 : 1); }
+                    });
+
+                    const executor = new ActionExecutor(client);
+                    const sdk = new BotSDK({ botUsername: 'puzzle-test' });
+                    (sdk as any).sendAction = async (action: any) => executor.execute(action);
+                    let tick = 0;
+                    const observe = () => {
+                        const state = client instanceof LiteClient ? client.collectBotState(++tick)
+                            : { interface: { isOpen: true, options: client.getInterfaceOptions() as InterfaceOption[] } };
+                        (sdk as any).state = state;
+                        return state.interface.options;
+                    };
+                    const bytes = () => Array.from(out.data.subarray(0, out.pos));
+                    const options = observe();
+                    if (mode === 'non-item-operable') {
+                        expect(options).toEqual([]);
+                        expect((await sdk.clickInterfaceOption(/^Move/)).success).toBe(false);
+                        expect(bytes()).toEqual([]);
+                        return;
+                    }
+                    const label = mode === 'tiles' ? 'Move' : 'Inspect';
+                    expect(options).toEqual(tiles.flatMap((itemId, slot) => itemId < 0 ? [] : [{
+                        index: slot < 12 ? slot + 1 : slot,
+                        text: `${label} Sliding button`, componentId: board, slot, itemId, operationIndex: 5
+                    }]));
+                    expect((await sdk.clickInterfaceOption(options[11])).success).toBe(true);
+                    expect(bytes()).toEqual([mode === 'tiles' ? 79 : ClientProt.INV_BUTTON5, 15, 110, 0, 11, 43, 122]);
+                    out.pos = 0;
+                    expect((await sdk.sendUseItem(11, 5, board)).success).toBe(true);
+                    expect(bytes()).toEqual([79, 15, 110, 0, 11, 43, 122]);
+
+                    if (mode === 'tiles') {
+                        out.pos = 0;
+                        expect((await sdk.sendClickComponentWithOption(board, 5, 12)).success).toBe(false);
+                        expect((await sdk.sendUseItem(12, 5, board)).success).toBe(false);
+                        expect(bytes()).toEqual([]);
+                        await receive(ServerProt.UPDATE_INV_PARTIAL, body => {
+                            body.p2(board);
+                            body.p1(11); body.p2(0); body.p1(0);
+                            body.p1(12); body.p2(3951); body.p1(1);
+                        });
+                        const updated = observe();
+                        expect(updated.find(option => option.slot === 11)).toBeUndefined();
+                        expect(updated[11]).toMatchObject({ slot: 12, itemId: 3950, componentId: board, operationIndex: 5 });
+                        expect((await sdk.clickInterfaceOption(updated[11])).success).toBe(true);
+                        expect(bytes()).toEqual([79, 15, 110, 0, 12, 43, 122]);
+                    }
+                } finally {
+                    lookup.mockRestore();
+                    resetBaseInterfaces();
+                    IfType.list = original;
+                }
+            });
+        }
+    });
 }
+
+test('Lite publishes read-only Regicide still readings only while modal 4919 is open', () => {
+    resetBaseInterfaces();
+    captureBaseInterfaces();
+    const out = new Packet(new Uint8Array(64));
+    const client = new LiteClient({
+        connection: { out, isClosed: false } as never,
+        locIndex: { lookup: () => 0, mapFlags: () => 0 } as never,
+        username: 'still-test', password: 'x'
+    });
+    const receive = (opcode: number, write?: (body: InstanceType<typeof Packet>) => void) => {
+        const body = new Packet(new Uint8Array(8));
+        write?.(body);
+        const size = body.pos;
+        body.pos = 0;
+        dispatch(client, opcode, body, size);
+    };
+    receive(ServerProt.IF_OPENMAIN, body => body.p2(4919));
+    receive(ServerProt.VARP_SMALL, body => { body.p2(330); body.p1(0); });
+    receive(ServerProt.VARP_LARGE, body => { body.p2(331); body.p4(0x24002001); });
+    expect(client.collectBotState(1).regicideStill).toEqual({ progress: 0, pressure: 0, heat: 0, pressureValve: 0, tarRegulator: 0 });
+
+    receive(ServerProt.VARP_SMALL, body => { body.p2(330); body.p1(18); });
+    receive(ServerProt.VARP_LARGE, body => { body.p2(331); body.p4(0x88081000); });
+    expect(client.collectBotState(2).regicideStill).toEqual({ progress: 18, pressure: 12, heat: 6, pressureValve: 1, tarRegulator: 2 });
+
+    receive(ServerProt.IF_CLOSE);
+    expect(client.collectBotState(3)).not.toHaveProperty('regicideStill');
+    receive(ServerProt.IF_OPENMAIN, body => body.p2(11126));
+    expect(client.collectBotState(4)).not.toHaveProperty('regicideStill');
+    expect(out.pos).toBe(0);
+});
 
 describe('browser game tick publication', () => {
     test('publishes decoded player state after PLAYER_INFO completes', async () => {
