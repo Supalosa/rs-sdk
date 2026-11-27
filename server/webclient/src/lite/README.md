@@ -32,6 +32,18 @@ complete `BotWorldState` — player, skills, inventory, equipment, nearby
 npcs/players/locs, ground items, dialog, interface, shop, bank, prayers,
 combat style, chat.
 
+## Embedded client timing
+
+`embedded.ts` polls the SDK action queue every 1 ms. Its explicit wait action
+uses a monotonic deadline measured in 20 ms client cycles. The session packet
+loop reads incoming data and flushes queued writes every 20 ms. Schedule
+gameplay against server world ticks and check inventory or XP for the outcome.
+
+On the live 400 ms world, a fleet using SDK revision `18f5aca9d` reached
+level 99 Runecraft in 1,417 world ticks. It used the periodic packet flush.
+The clocked Body benchmark also compares the 1 ms and 5 ms action timers.
+[Live Nature run](https://github.com/Supalosa/rs-sdk-gameplay-scripts/blob/main/docs/nature-seven-tick.md) · [Body timer and flush comparisons](https://github.com/Supalosa/rs-sdk-gameplay-scripts/blob/main/docs/fresh-trade-benchmark.md)
+
 ## Layout
 
 | File | Role |
