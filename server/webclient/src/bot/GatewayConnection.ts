@@ -43,7 +43,8 @@ export class GatewayConnection {
     constructor(
         handler: GatewayMessageHandler,
         credentialSource?: () => { username: string; password: string },
-        configSource?: () => { maxMessageLength: number }
+        configSource?: () => { maxMessageLength: number },
+        private readonly gatewayUrl?: string
     ) {
         this.handler = handler;
         this.credentialSource = credentialSource ?? null;
@@ -70,7 +71,7 @@ export class GatewayConnection {
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const host = window.location.host;
-        const url = `${protocol}//${host}/gateway`;
+        const url = this.gatewayUrl ?? `${protocol}//${host}/gateway`;
 
         try {
             this.ws = new WebSocket(url);

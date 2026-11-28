@@ -83,6 +83,7 @@ const { default: Packet } = await import('#/io/Packet.js');
 const { default: ClientPlayer, PlayerUpdate } = await import('#/dash3d/ClientPlayer.js');
 const { ActionExecutor } = await import('./ActionExecutor.js');
 const { BotStateCollector } = await import('./StateCollector.js');
+const { BotOverlay } = await import('./BotOverlay.js');
 const { LiteClient } = await import('../lite/LiteClient.js');
 const { dispatch } = await import('../lite/protocol/incoming.js');
 const { captureBaseInterfaces, resetBaseInterfaces } = await import('../lite/interfaces.js');
@@ -275,6 +276,24 @@ for (const kind of ['browser', 'lite'] as const) {
 }
 
 describe('browser game tick publication', () => {
+    test('a managed observer receives the same state as the gateway', () => {
+        const state = { tick: 8, inGame: true };
+        const observed: unknown[] = [];
+        const sent: unknown[] = [];
+        const overlay = Object.assign(Object.create(BotOverlay.prototype), {
+            gateway: { isConnected: () => true, sendState: (value: unknown) => sent.push(value) },
+            options: {
+                onState: (value: unknown) => {
+                    observed.push(value);
+                }
+            },
+            collectWorldState: () => state
+        }) as InstanceType<typeof BotOverlay>;
+        overlay['sendState']();
+        expect(observed).toEqual([state]);
+        expect(sent).toEqual([state]);
+    });
+
     test('publishes decoded player state after PLAYER_INFO completes', async () => {
         // Teleport the local player to plane 1, tile (55, 56), with a hitmark.
         // No old/new visible players; 2047 terminates the new-player bit list.

@@ -18,6 +18,11 @@ export function getBotOverlay(): BotOverlay | null {
     return globalBotOverlay;
 }
 
+export interface BotOverlayOptions {
+    gatewayUrl?: string;
+    onState?: (state: BotWorldState) => void | Promise<void>;
+}
+
 export class BotOverlay implements GatewayMessageHandler {
     private client: Client;
     private collector: BotStateCollector;
@@ -36,14 +41,15 @@ export class BotOverlay implements GatewayMessageHandler {
     private lastActionTime: number = 0;
     private activityCheckInterval: ReturnType<typeof setInterval> | null = null;
 
-    constructor(client: Client) {
+    constructor(client: Client, private readonly options: BotOverlayOptions = {}) {
         this.client = client;
         this.collector = new BotStateCollector(client);
         this.executor = new ActionExecutor(client);
         this.gateway = new GatewayConnection(
             this,
             () => this.client.getCredentials(),
-            () => ({ maxMessageLength: this.client.getMaxMessageLength() })
+            () => ({ maxMessageLength: this.client.getMaxMessageLength() }),
+            options.gatewayUrl
         );
         this.ui = new OverlayUI(client, {
             onPacketLogToggle: () => {}
@@ -309,6 +315,13 @@ export class BotOverlay implements GatewayMessageHandler {
         if (!state) return;
 
         this.gateway.sendState(state);
+        if (this.options.onState) {
+            try {
+                void Promise.resolve(this.options.onState(state)).catch(() => {});
+            } catch {
+                // The state observer can disappear independently of the game client.
+            }
+        }
     }
 
     private finishAction(entry: QueuedBotAction, result: ActionResult): void {

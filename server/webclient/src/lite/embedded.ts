@@ -6,8 +6,13 @@ import type { BotAction } from '#/bot/types.js';
 import type { ActionResult } from '#/bot/ActionExecutor.js';
 import { tradeTrace, tradeTraceAction, tradeTraceState } from '../../../../sdk/trade-diagnostics.js';
 import { offerBoundaryEnabled, offerBoundarySnapshot, offerBoundaryTrace } from '../../../../sdk/offer-boundary-trace.js';
-import { installClientTestClock } from './test-clock.js';
+import { installClientTestClock, type TestClockOptions } from './test-clock.js';
 export const leaseAuthorizationVersion = 1;
+export const testClockConfigurationVersion = 1;
+
+export interface EmbeddedSessionOptions extends SessionOptions {
+    testClock?: TestClockOptions;
+}
 
 const ACTION_PUMP_MS = 1;
 // Embedded SDK waits use a 20 ms client cycle independently of action polling.
@@ -32,7 +37,7 @@ class EmbeddedSocket extends EventTarget {
     private authenticated = false;
     private testClock?: ReturnType<typeof installClientTestClock>;
     constructor(
-        private options: SessionOptions,
+        private options: EmbeddedSessionOptions,
         private connectSession: typeof startSession = startSession
     ) {
         super();
@@ -68,7 +73,13 @@ class EmbeddedSocket extends EventTarget {
                 await this.session.stopped;
                 return;
             }
-            this.testClock = installClientTestClock(this.session.client, () => this.session!.client.collectBotState(this.tick));
+            const client = this.session.client;
+            this.testClock = installClientTestClock(
+                client,
+                () => client.collectBotState(this.tick),
+                this.options.username,
+                this.options.testClock
+            );
             this.session.client.setOnGameTickCallback(() => {
                 this.tick++;
                 this.publish();
@@ -202,6 +213,6 @@ class EmbeddedSocket extends EventTarget {
 }
 
 /** Session injection allows protocol fixtures to exercise the real queue without a game server. */
-export function createEmbeddedSocket(options: SessionOptions, dependencies: { startSession?: typeof startSession } = {}) {
+export function createEmbeddedSocket(options: EmbeddedSessionOptions, dependencies: { startSession?: typeof startSession } = {}) {
     return new EmbeddedSocket(options, dependencies.startSession);
 }

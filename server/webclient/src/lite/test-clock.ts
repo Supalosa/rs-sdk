@@ -2,10 +2,20 @@ import type { LiteClient } from './LiteClient.js';
 import type { ActionResult } from '#/bot/ActionExecutor.js';
 import type { BotWorldState } from '#/bot/types.js';
 
-// Enabled only on isolated test workers. All fences use the game WebSocket.
-export function installClientTestClock(client: LiteClient, readState: () => BotWorldState | null) {
-    const url = process.env.TEST_CLOCK_URL;
-    const token = process.env.TEST_CLOCK_TOKEN;
+export interface TestClockOptions {
+    url: string;
+    token: string;
+}
+
+// Opt-in per isolated session. All fences use the game WebSocket.
+export function installClientTestClock(
+    client: LiteClient,
+    readState: () => BotWorldState | null,
+    username: string,
+    options?: TestClockOptions
+) {
+    if (!options) return undefined;
+    const { url, token } = options;
     if (!url || !token) return undefined;
     const stream = client.conn.stream;
     let sequence = 0;
@@ -36,7 +46,7 @@ export function installClientTestClock(client: LiteClient, readState: () => BotW
             const response = await fetch(url + "/step", {
                 method: "POST",
                 headers: { authorization: "Bearer " + token, "content-type": "application/json" },
-                body: JSON.stringify({ username: process.env.BOT_USERNAME, sequence }),
+                body: JSON.stringify({ username, sequence }),
                 signal: AbortSignal.timeout(10000),
             });
             if (!response.ok) {

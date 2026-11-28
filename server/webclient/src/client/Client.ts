@@ -89,6 +89,7 @@ const ENABLE_BOT_SDK = process.env.ENABLE_BOT_SDK === 'true';
 
 // Conditional Bot SDK import - will be tree-shaken in standard build
 import * as BotSDKModule from '#/bot/index.js';
+import type { BotOverlayOptions } from '#/bot/BotOverlay.js';
 const BotOverlay = ENABLE_BOT_SDK ? BotSDKModule.BotOverlay : null;
 
 const CLIENT_VERSION = 289;
@@ -669,6 +670,8 @@ export class Client extends GameShell {
 
     // rs-sdk: Bot SDK overlay for bot development (dynamically loaded when enabled)
     private botOverlay: InstanceType<typeof import('#/bot/index.js').BotOverlay> | null = null;
+    private botOverlayOptions?: BotOverlayOptions;
+    private lastLoginResponse?: number;
     private botAutoLoginAttempted: boolean = false;
     private loginInProgress: boolean = false;
 
@@ -4239,6 +4242,7 @@ export class Client extends GameShell {
     }
 
     private async login(username: string, password: string, reconnect: boolean): Promise<void> {
+        this.lastLoginResponse = undefined;
         try {
             if (username.length < 1 || username.length > 12) {
                 this.loginMes1 = '';
@@ -4329,6 +4333,7 @@ export class Client extends GameShell {
                 response = await this.stream.read();
             }
 
+            this.lastLoginResponse = response;
             if (response === 1) {
                 await sleep(2000);
                 await this.login(username, password, reconnect);
@@ -4432,7 +4437,7 @@ export class Client extends GameShell {
 
                 // Initialize Bot SDK overlay (only if enabled)
                 if (ENABLE_BOT_SDK && BotOverlay && !this.botOverlay) {
-                    this.botOverlay = new BotOverlay(this);
+                    this.botOverlay = new BotOverlay(this, this.botOverlayOptions);
                 }
 
                 for (let i = 0; i < 5; i++) {
@@ -14745,6 +14750,15 @@ export class Client extends GameShell {
         const x2: number = x1 + 278;
         const y2: number = y1 + 20;
         return !this.ingame && this.loginscreen === 2 && this.mouseX >= x1 && this.mouseX <= x2 && this.mouseY >= y1 && this.mouseY <= y2;
+    }
+
+    /** Configure the bot overlay before logging in. */
+    setBotOverlayOptions(options: BotOverlayOptions): void {
+        this.botOverlayOptions = options;
+    }
+
+    getLastLoginResponse(): number | undefined {
+        return this.lastLoginResponse;
     }
 
     /**
